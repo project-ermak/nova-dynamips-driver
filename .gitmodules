@@ -1,0 +1,3 @@
+[submodule "src/dynagen"]
+	path = src/dynagen
+	url = git@github.com:project-ermak/dynagen-gns3.git

@@ -1,2 +1,5 @@
+.venv
 .idea
 *.pyc
+*.iml
+.DS_store
