@@ -1,74 +1,167 @@
-from nova.virt.driver import ComputeDriver
+import os
+from nova import flags, utils, exception
+from nova.openstack.common import cfg
+from nova.virt import images
+from nova.virt.libvirt import utils as libvirt_utils
+from nova.virt.driver import ComputeDriver, InstanceInfo
+from nova.compute import instance_types
+from nova.compute import power_state
+
+from dynagen import dynamips_lib
+
+dynamips_opts = [
+    cfg.StrOpt('dynamips_host',
+        default='localhost',
+        help='Connection host for dynamips'),
+    cfg.StrOpt('dynamips_port',
+        default=7200,
+        help='Connection port for dynamips')
+    ]
+FLAGS = flags.FLAGS
+FLAGS.register_opts(dynamips_opts)
+
+
+def get_connection(read_only):
+    return DynamipsDriver()  # TODO: readonly support
+
+
+class DynamipsClient(dynamips_lib.Dynamips):
+
+    def __init__(self, host, port=7200, timeout=500):
+        old_nosend = dynamips_lib.NOSEND
+        dynamips_lib.NOSEND = True
+        super(DynamipsClient, self).__init__(host, port, timeout)
+        dynamips_lib.NOSEND = old_nosend
+        self.s.setblocking(1)
+        self.s.connect((host, port))
+
+    def vm_list(self):
+        map(lambda x: x.split()[1], self.list("vm"))
+
+
+class RouterWrapper(object):
+    """
+    Mixin for Router class with openstack conversions
+    """
+
+    STATES = {
+        'stopped': power_state.SHUTDOWN,
+        'running': power_state.RUNNING,
+        'suspended': power_state.SUSPENDED
+    }
+
+    @property
+    def os_state(self):
+        return self.STATES[self.state]
+
+    @property
+    def os_name(self):
+        return self.__os_name
+
+    @os_name.setter
+    def os_name(self, value):
+        self.__os_name = value
+
+    @property
+    def os_prototype(self):
+        return self.__os_prototype
+
+    @os_prototype.setter
+    def os_prototype(self, instance):
+        self.__os_prototype = instance
+
 
 
 class DynamipsDriver(ComputeDriver):
     """Driver for Dynamips CISCO emulator."""
 
+    def __init__(self):
+        self._routers = {}
+        self.dynamips = DynamipsClient(FLAGS.dynamips_host, FLAGS.dynamips_port)
+
     def init_host(self, host):
-        """Connect to Dynamips socket"""
         pass
 
     def get_info(self, instance):
-        # TODO: cXXXX show_hardware
-        raise NotImplementedError()
+        n = self._router_by_name(instance["name"])
+        return {
+            'state': n.os_state,
+            'max_mem': int(instance_types
+                         .get_instance_type(n.os_prototype.instance_type_id)
+                         .get("memory_mb")) * 1024,
+            'mem': n.ram * 1024,
+            'num_cpu': 1,
+            'cpu_time': 0 # cpuinfo?
+        }
+
+    def _router_by_name(self, name):
+        try:
+            return filter(lambda r: r.os_name == name,
+                          self._routers.itervalues())[0]
+        except IndexError:
+            raise exception.InstanceNotFound(instance_id=name)
 
     def list_instances(self):
         """Lists instances
 
         :return list of names
         """
-        # TODO: vm list
-        raise NotImplementedError()
+        return map(lambda x: x.os_name, self._routers.itervalues())
+
+    def _class_for_instance(self, instance):
+        class CurrentRouter(RouterWrapper, dynamips_lib.Router): # TODO: mangle class
+            pass
+        return CurrentRouter
+
+    def _instance_to_router(self, instance):
+        inst_type = \
+            instance_types.get_instance_type(instance["instance_type_id"])
+        C = self._class_for_instance(instance)
+        r = C(self.dynamips, name=instance["id"])
+        r.os_name = instance["name"]
+        r.ram = inst_type["memory_mb"]
+        r.os_prototype = instance
+        return r
+
+    def _setup_image(self, context, instance):
+        base_dir = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
+        if not os.path.exists(base_dir):
+            libvirt_utils.ensure_tree(base_dir)
+        path = os.path.join(base_dir, instance["image_ref"])
+        if not os.path.exists(path):
+            images.fetch_to_raw(context, instance["image_ref"], path,
+                instance["user_id"], instance["project_id"])
+        return path
 
     def list_instances_detail(self):
-        # TODO: cXXXX show hardware (?)
-        raise NotImplementedError()
+        return map(lambda i: InstanceInfo(i.os_name, i.os_state),
+            self._routers.itervalues())
 
     def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
-        """
-        Create a new instance/VM/domain on the virtualization platform.
-
-        :param context: security context
-        :param instance: Instance object as returned by DB layer.
-                         This function should use the data there to guide
-                         the creation of the new instance.
-        :param image_meta: image object returned by nova.image.glance that
-                           defines the image from which to boot this instance
-        :param network_info:
-           :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
-        :param block_device_info: Information about block devices to be
-                                  attached to the instance.
-        """
-        # TODO: cXXXX create <name> <id>
-        # TODO: cXXXX set_<whatever>
-        # TODO: cXXXX run
-        raise NotImplementedError()
+        self._setup_image(context, instance)
+        r = self._instance_to_router(instance)
+        r.start()
+        self._routers[instance["id"]] = r
 
     def destroy(self, instance, network_info, block_device_info=None):
-        """Destroy (shutdown and delete) the specified instance.
+        try:
+            r = self._router_by_name(instance["name"])
+        except exception.NotFound:
+            r = None
 
-        :param instance: Instance object as returned by DB layer.
-        :param network_info:
-           :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
-        :param block_device_info: Information about block devices that should
-                                  be detached from the instance.
+        if r is not None:
+            r.stop()
+            r.delete()
+            del self._routers[r.name]
+            # remove IOS image (?)
+            # remove ramdisks (?)
 
-        """
-        # TODO: cXXXX delete
-        raise NotImplementedError()
 
     def reboot(self, instance, network_info, reboot_type):
-        """Reboot the specified instance.
-
-        :param instance: Instance object as returned by DB layer.
-        :param network_info:
-           :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
-        :param reboot_type: Either a HARD or SOFT reboot
-        """
-        # TODO: vm stop
-        # TODO: vm start (persistence ?)
-        raise NotImplementedError()
+        r = self._routers[instance["id"]]
+        r.stop()
+        r.start()
 
     def snapshot_instance(self, context, instance_id, image_id):
         """
@@ -106,30 +199,6 @@ class DynamipsDriver(ComputeDriver):
         # no meaning in our implementation
         raise NotImplementedError()
 
-    def compare_cpu(self, cpu_info):
-        """Compares given cpu info against host
-
-        Before attempting to migrate a VM to this host,
-        compare_cpu is called to ensure that the VM will
-        actually run here.
-
-        :param cpu_info: (str) JSON structure describing the source CPU.
-        :returns: None if migration is acceptable
-        :raises: :py:class:`~nova.exception.InvalidCPUInfo` if migration
-                 is not acceptable.
-        """
-        # no migration for now
-        raise NotImplementedError()
-
-    def migrate_disk_and_power_off(self, context, instance, dest,
-                                   instance_type, network_info):
-        """
-        Transfers the disk of a running instance in multiple phases, turning
-        off the instance before the end.
-        """
-        # no migration for now
-        raise NotImplementedError()
-
     def snapshot(self, context, instance, image_id):
         """
         Snapshots the specified instance.
@@ -142,28 +211,11 @@ class DynamipsDriver(ComputeDriver):
         # TODO: dunno
         raise NotImplementedError()
 
-    def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance):
-        """Completes a resize, turning on the migrated instance
-
-        :param network_info:
-           :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
-        :param image_meta: image object returned by nova.image.glance that
-                           defines the image from which this instance
-                           was created
-        """
-        # no migration for now
-        raise NotImplementedError()
-
-    def confirm_migration(self, migration, instance, network_info):
-        """Confirms a resize, destroying the source VM"""
-        # no migration for now
-        raise NotImplementedError()
-
-    def finish_revert_migration(self, instance, network_info):
-        """Finish reverting a resize, powering back on the instance"""
-        # no migration for now
-        raise NotImplementedError()
+    # compare_cpu
+    # migrate_disk_and_power_off
+    # finish_migration
+    # confim_migration
+    # finish_revert_migration
 
     def pause(self, instance):
         """Pause the specified instance."""
@@ -175,13 +227,13 @@ class DynamipsDriver(ComputeDriver):
 
     def suspend(self, instance):
         """suspend the specified instance"""
-        # TODO: vm suspend
-        raise NotImplementedError()
+        self._routers[instance["id"]].suspend()
 
     def resume(self, instance):
         """resume the specified instance"""
-        # TODO: vm resume
-        raise NotImplementedError()
+        r = self._router_by_name(instance["name"])
+        if r.os_state != power_state.RUNNING:
+            r.resume()
 
     def resume_state_on_host_boot(self, context, instance, network_info):
         """resume guest state when a host is booted"""
@@ -200,13 +252,11 @@ class DynamipsDriver(ComputeDriver):
 
     def power_off(self, instance):
         """Power off the specified instance."""
-        # TODO: cXXXX stop
-        raise NotImplementedError()
+        self._routers[instance["id"]].stop() # TODO: semantics may differ
 
     def power_on(self, instance):
         """Power on the specified instance"""
-        # TODO: cXXXX start
-        raise NotImplementedError()
+        self._routers[instance["id"]].start() # TODO: semantics may differ
 
     def update_available_resource(self, ctxt, host):
         """Updates compute manager resource info on ComputeNode table.
