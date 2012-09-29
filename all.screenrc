@@ -1,0 +1,4 @@
+screen -t nova-compute 0 nova-compute --config-file=./cfg/nova.conf
+screen -t nova-network 1 nova-network --config-file=./cfg/nova.conf
+screen -t nova-api 2 nova-api --config-file=./cfg/nova.conf
+screen -t nova-scheduler 3 nova-scheduler --config-file=./cfg/nova.conf
