@@ -1,0 +1,2 @@
+screen -t glance-api 1 glance-api --config-file=./cfg/glance-api.conf
+screen -t glance-registry 2 glance-registry --config-file=./cfg/glance-registry.conf

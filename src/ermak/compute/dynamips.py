@@ -1,5 +1,6 @@
 import os
-from nova import flags, utils, exception
+from nova import flags, utils, exception, db
+from nova import log as logging
 from nova.openstack.common import cfg
 from nova.virt import images
 from nova.virt.libvirt import utils as libvirt_utils
@@ -8,6 +9,8 @@ from nova.compute import instance_types
 from nova.compute import power_state
 
 from dynagen import dynamips_lib
+
+LOG = logging.getLogger(__name__)
 
 dynamips_opts = [
     cfg.StrOpt('dynamips_host',
@@ -21,13 +24,14 @@ FLAGS = flags.FLAGS
 FLAGS.register_opts(dynamips_opts)
 
 
-def get_connection(read_only):
+def get_connection(read_only=False):
     return DynamipsDriver()  # TODO: readonly support
 
 
 class DynamipsClient(dynamips_lib.Dynamips):
 
     def __init__(self, host, port=7200, timeout=500):
+        dynamips_lib.debug = LOG.debug
         old_nosend = dynamips_lib.NOSEND
         dynamips_lib.NOSEND = True
         super(DynamipsClient, self).__init__(host, port, timeout)
@@ -127,7 +131,7 @@ class DynamipsDriver(ComputeDriver):
         base_dir = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
         if not os.path.exists(base_dir):
             libvirt_utils.ensure_tree(base_dir)
-        path = os.path.join(base_dir, instance["image_ref"])
+        path = os.path.abspath(os.path.join(base_dir, instance["image_ref"]))
         if not os.path.exists(path):
             images.fetch_to_raw(context, instance["image_ref"], path,
                 instance["user_id"], instance["project_id"])
@@ -139,8 +143,10 @@ class DynamipsDriver(ComputeDriver):
 
     def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
-        self._setup_image(context, instance)
+        image = self._setup_image(context, instance)
         r = self._instance_to_router(instance)
+        r.image = image
+        r.mmap = False
         r.start()
         self._routers[instance["id"]] = r
 
@@ -151,7 +157,7 @@ class DynamipsDriver(ComputeDriver):
             r = None
 
         if r is not None:
-            r.stop()
+            r.stop() # TODO: error "unable to stop instance" may occurs
             r.delete()
             del self._routers[r.name]
             # remove IOS image (?)
@@ -268,8 +274,31 @@ class DynamipsDriver(ComputeDriver):
         :param host: hostname that compute manager is currently running
 
         """
-        # TODO: wtf
-        raise NotImplementedError()
+        try:
+            service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
+        except exception.NotFound:
+            raise exception.ComputeServiceUnavailable(host=host)
+
+        # Updating host information
+        # TODO implement
+        dic = {'vcpus': 1,
+               'memory_mb': 4096,
+               'local_gb': 1028,
+               'vcpus_used': 0,
+               'memory_mb_used': 0,
+               'local_gb_used': 0,
+               'hypervisor_type': 'dynamips',
+               'hypervisor_version': '0.2.7+',
+               'service_id': service_ref['id'],
+               'cpu_info': '?'}
+
+        compute_node_ref = service_ref['compute_node']
+        if not compute_node_ref:
+            LOG.info(_('Compute_service record created for %s ') % host)
+            db.compute_node_create(ctxt, dic)
+        else:
+            LOG.info(_('Compute_service record updated for %s ') % host)
+            db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
 
     def refresh_security_group_rules(self, security_group_id):
         """This method is called after a change to security groups.
@@ -450,12 +479,14 @@ class DynamipsDriver(ComputeDriver):
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
         # TODO: configure and start NIO brige
-        raise NotImplementedError()
+        # raise NotImplementedError()
+        pass
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
         # TODO: unconfigure NIO bridge
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        pass
 
     def update_host_status(self):
         """Refresh host stats"""
@@ -465,7 +496,22 @@ class DynamipsDriver(ComputeDriver):
     def get_host_stats(self, refresh=False):
         """Return currently known host stats"""
         # TODO: wtf
-        raise NotImplementedError()
+        # raise NotImplementedError()
+        return {
+            'host_name-description': 'Fake Host',
+            'host_hostname': 'fake-mini',
+            'host_memory_total': 8000000000,
+            'host_memory_overhead': 10000000,
+            'host_memory_free': 7900000000,
+            'host_memory_free_computed': 7900000000,
+            'host_other_config': {},
+            'host_ip_address': '192.168.1.109',
+            'host_cpu_info': {},
+            'disk_available': 500000000000,
+            'disk_total': 600000000000,
+            'disk_used': 100000000000,
+            'host_uuid': 'cedb9b39-9388-41df-8891-c5c9a0c0fe5f',
+            'host_name_label': 'fake-mini'}
 
     def list_disks(self, instance_name):
         """
