@@ -1,6 +1,8 @@
+import re
 import os
 from nova import flags, utils, exception, db
 from nova import log as logging
+from nova import exception
 from nova.openstack.common import cfg
 from nova.virt import images
 from nova.virt.libvirt import utils as libvirt_utils
@@ -36,8 +38,12 @@ class DynamipsClient(dynamips_lib.Dynamips):
         dynamips_lib.NOSEND = True
         super(DynamipsClient, self).__init__(host, port, timeout)
         dynamips_lib.NOSEND = old_nosend
-        self.s.setblocking(1)
-        self.s.connect((host, port))
+        if not dynamips_lib.NOSEND:
+            self.s.setblocking(1)
+            try:
+                self.s.connect((host, port))
+            except:
+                raise dynamips_lib.DynamipsError('Could not connect to server')
 
     def vm_list(self):
         map(lambda x: x.split()[1], self.list("vm"))
@@ -112,16 +118,32 @@ class DynamipsDriver(ComputeDriver):
         """
         return map(lambda x: x.os_name, self._routers.itervalues())
 
-    def _class_for_instance(self, instance):
-        class CurrentRouter(RouterWrapper, dynamips_lib.Router): # TODO: mangle class
+    def _class_for_flavor(self, flavorname):
+        res = re.match(r'r1\.(.*)', flavorname)
+        if res:
+            model = res.group(1)
+            try:
+                # try direct model first
+                return dynamips_lib.__dict__[model.upper()]
+            except KeyError:
+                raise exception.FlavorNotFound(
+                    "Can not find router model %s" % model)
+        else:
+            raise exception.FlavorNotFound(
+                "Dynamips accepts only r1.xxx flavors, got %s" % flavorname)
+
+    def _class_for_instance(self, instance, inst_type):
+        class_ = self._class_for_flavor(inst_type['name'])
+        class CurrentRouter(RouterWrapper, class_): # TODO: metaclass?
             pass
         return CurrentRouter
 
-    def _instance_to_router(self, instance):
+    def _instance_to_router(self, context, instance):
         inst_type = \
             instance_types.get_instance_type(instance["instance_type_id"])
-        C = self._class_for_instance(instance)
-        r = C(self.dynamips, name=instance["id"])
+        chassis = db.instance_metadata_get(context, instance.id).get("chassis")
+        C = self._class_for_instance(instance, inst_type)
+        r = C(self.dynamips, name=instance["id"], chassis=chassis)
         r.os_name = instance["name"]
         r.ram = inst_type["memory_mb"]
         r.os_prototype = instance
@@ -144,7 +166,7 @@ class DynamipsDriver(ComputeDriver):
     def spawn(self, context, instance, image_meta,
               network_info=None, block_device_info=None):
         image = self._setup_image(context, instance)
-        r = self._instance_to_router(instance)
+        r = self._instance_to_router(context, instance)
         r.image = image
         r.mmap = False
         r.start()
