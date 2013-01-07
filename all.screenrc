@@ -2,4 +2,6 @@ screen -t nova-compute 0 nova-compute --config-file=./cfg/nova.conf
 screen -t nova-network 1 nova-network --config-file=./cfg/nova.conf
 screen -t nova-api 2 nova-api --config-file=./cfg/nova.conf
 screen -t nova-scheduler 3 nova-scheduler --config-file=./cfg/nova.conf
-screen -t shell 4 ./nova_shell.sh
+screen -t nova-ajaxterm-proxy 4 ./src/ermak/bin/nova-ajaxterm-proxy --config-file=./cfg/nova.conf
+screen -t nova-consoleauth 5 nova-consoleauth --config-file=./cfg/nova.conf
+screen -t shell 6 ./nova_shell.sh

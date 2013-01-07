@@ -1,5 +1,8 @@
+import uuid
 import re
 import os
+import subprocess
+
 from nova import flags, utils, exception, db
 from nova import log as logging
 from nova import exception
@@ -10,9 +13,10 @@ from nova.virt.driver import ComputeDriver, InstanceInfo
 from nova.compute import instance_types
 from nova.compute import power_state
 
+import ermak.ajaxterm
 from dynagen import dynamips_lib
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("nova.virt.dynamips")
 
 dynamips_opts = [
     cfg.StrOpt('dynamips_host',
@@ -23,6 +27,7 @@ dynamips_opts = [
         help='Connection port for dynamips')
     ]
 FLAGS = flags.FLAGS
+flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 FLAGS.register_opts(dynamips_opts)
 
 
@@ -80,6 +85,16 @@ class RouterWrapper(object):
     def os_prototype(self, instance):
         self.__os_prototype = instance
 
+    def start_ajaxterm(self):
+        start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
+        port = libvirt_utils.get_open_port(int(start_port), int(end_port))
+        args = ["ajaxterm",
+                "-p", str(port), # TODO: config host too
+                "-d",
+                "--command", "telnet -E localhost %s" % self.console]
+        LOG.debug("Spawning process: %s" % args)
+        self.__ajaxterm_process = libvirt_utils.execute(*args)
+        return FLAGS.vncserver_proxyclient_address, port
 
 
 class DynamipsDriver(ComputeDriver):
@@ -207,8 +222,15 @@ class DynamipsDriver(ComputeDriver):
         raise NotImplementedError()
 
     def get_vnc_console(self, instance):
-        # TODO: dunno
-        raise NotImplementedError()
+        """Get host and port for TELNET console on instance
+
+        Desperate its name, VNC console infrastructure is suitable for
+        any protocols, including SSH and TELNET.
+        """
+        # TODO: wrap in SSL
+        r = self._routers[instance["id"]]
+        host, port = r.start_ajaxterm()
+        return {'host': host, 'port': port, 'internal_access_path': None}
 
     def get_diagnostics(self, instance):
         # TODO: dunno
