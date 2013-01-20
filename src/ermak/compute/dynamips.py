@@ -178,14 +178,20 @@ class DynamipsDriver(ComputeDriver):
         return map(lambda i: InstanceInfo(i.os_name, i.os_state),
             self._routers.itervalues())
 
-    def spawn(self, context, instance, image_meta,
-              network_info=None, block_device_info=None):
+    def _do_run_instance(self, context, instance):
+        self._do_create_instance(context, instance)
+        self._router_by_name(instance["name"]).start()
+
+    def _do_create_instance(self, context, instance):
         image = self._setup_image(context, instance)
         r = self._instance_to_router(context, instance)
         r.image = image
         r.mmap = False
-        r.start()
         self._routers[instance["id"]] = r
+
+    def spawn(self, context, instance, image_meta,
+              network_info=None, block_device_info=None):
+        self._do_run_instance(context, instance)
 
     def destroy(self, instance, network_info, block_device_info=None):
         try:
@@ -285,10 +291,24 @@ class DynamipsDriver(ComputeDriver):
         if r.os_state != power_state.RUNNING:
             r.resume()
 
+    def _current_state_for_instance(self, instance):
+        try:
+            return self._router_by_name(instance["name"]).os_state
+        except exception.NotFound:
+            return power_state.NOSTATE
+
     def resume_state_on_host_boot(self, context, instance, network_info):
         """resume guest state when a host is booted"""
-        # TODO: ???
-        raise NotImplementedError()
+        current_state = self._current_state_for_instance(instance)
+        if current_state == power_state.NOSTATE:
+            self._do_create_instance(context, instance)
+        current_state = self._current_state_for_instance(instance)
+
+        if current_state == power_state.SHUTDOWN:
+            self.power_on(instance)
+            return self._current_state_for_instance(instance)
+        else:
+            return power_state.SHUTDOWN
 
     def rescue(self, context, instance, network_info, image_meta):
         """Rescue the specified instance"""
