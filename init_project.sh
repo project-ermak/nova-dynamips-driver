@@ -2,7 +2,7 @@
 
 cd `dirname $0`
 
-OPTS="--config-file=./cfg/nova.conf"
+OPTS="--config-file=./etc/nova.conf"
 ADMIN=admin
 USER=guest
 PROJECT=ermak

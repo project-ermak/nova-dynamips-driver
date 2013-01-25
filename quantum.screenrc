@@ -1,0 +1,1 @@
+screen -t quantum-server 1 quantum-server --config-file=./etc/quantum.conf
