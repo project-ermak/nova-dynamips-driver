@@ -15,8 +15,10 @@ from nova.compute import power_state
 
 import ermak.ajaxterm
 from dynagen import dynamips_lib
+from ermak.util.dynamips import DynamipsClient
 
 LOG = logging.getLogger("nova.virt.dynamips")
+dynamips_lib.debug = LOG.debug
 
 dynamips_opts = [
     cfg.StrOpt('dynamips_host',
@@ -33,25 +35,6 @@ FLAGS.register_opts(dynamips_opts)
 
 def get_connection(read_only=False):
     return DynamipsDriver()  # TODO: readonly support
-
-
-class DynamipsClient(dynamips_lib.Dynamips):
-
-    def __init__(self, host, port=7200, timeout=500):
-        dynamips_lib.debug = LOG.debug
-        old_nosend = dynamips_lib.NOSEND
-        dynamips_lib.NOSEND = True
-        super(DynamipsClient, self).__init__(host, port, timeout)
-        dynamips_lib.NOSEND = old_nosend
-        if not dynamips_lib.NOSEND:
-            self.s.setblocking(1)
-            try:
-                self.s.connect((host, port))
-            except:
-                raise dynamips_lib.DynamipsError('Could not connect to server')
-
-    def vm_list(self):
-        map(lambda x: x.split()[1], self.list("vm"))
 
 
 class RouterWrapper(object):

@@ -1,14 +1,25 @@
+import logging
+
 from quantum.api.api_common import OperationalStatus
 from quantum.common import exceptions
 from quantum.db import api as db
 from quantum.quantum_plugin_base import QuantumPluginBase
+from dynagen import dynamips_lib
+
 from ermak.quantum.const import *
 from ermak.quantum import configuration as conf
+from ermak.quantum import db as plugin_db
+from ermak.util.dynamips import DynamipsClient, Bridge
+
+LOG = logging.getLogger("quantum.plugin.dynamips_udp")
+dynamips_lib.debug = LOG.debug
+
 
 def net_dict(net):
     return {NET_ID: net[UUID],
             NET_NAME: net[NETWORKNAME],
             NET_OP_STATUS: net[OPSTATUS]}
+
 
 def port_dict(port):
     if port[PORTSTATE] == PORT_UP:
@@ -21,11 +32,13 @@ def port_dict(port):
             NET_ID: port[NETWORKID],
             ATTACHMENT: port[INTERFACEID]}
 
+
 def auth_tenant_net(f):
     def validated(self, tenant_id, net_id, *args, **kwargs):
         db.validate_network_ownership(tenant_id, net_id)
         return f(self, tenant_id, net_id, *args, **kwargs)
     return validated
+
 
 def auth_tenant_net_port(f):
     def validated(self, tenant_id, net_id, port_id, *args, **kwargs):
@@ -34,13 +47,13 @@ def auth_tenant_net_port(f):
     return validated
 
 
-class DynamipsBridgePlugin(QuantumPluginBase):
+class UdpSocketPlugin(QuantumPluginBase):
+
+    supported_extension_aliases = ['udp-channels']
 
     def __init__(self):
         db.configure_db({'sql_connection': conf.DB_SQL_CONNECTION,
                          'reconnect_interval': conf.DB_RECONNECT_INTERVAL})
-        # TBD: initialize connection to dynamips
-        pass
 
     def get_all_networks(self, tenant_id, **kwargs):
         network_list = db.network_list(tenant_id)
@@ -57,8 +70,12 @@ class DynamipsBridgePlugin(QuantumPluginBase):
     def create_network(self, tenant_id, net_name, **kwargs):
         new_network = db.network_create(tenant_id, net_name,
             op_status=OperationalStatus.DOWN)
-        # TBD: create bridge in hypervisor
-        return net_dict(new_network)
+        try:
+            plugin_db.allocate_udp_link(new_network[UUID])
+            return net_dict(new_network)
+        except Exception:
+            db.network_destroy(new_network[UUID])
+            raise
 
     @auth_tenant_net
     def update_network(self, tenant_id, net_id, **kwargs):
@@ -73,10 +90,9 @@ class DynamipsBridgePlugin(QuantumPluginBase):
             raise exceptions.NetworkInUse(net_id=net_id)
         for port in ports:
             self.delete_port(tenant_id, net_id, port[UUID])
-        # TBD: stop bridge in hypervisor
+        plugin_db.deallocate_udp_link(net_id)
         db.network_destroy(net_id)
         return net_dict(net)
-
 
     @auth_tenant_net_port
     def plug_interface(self, tenant_id, net_id, port_id, remote_interface_id):
@@ -107,13 +123,17 @@ class DynamipsBridgePlugin(QuantumPluginBase):
     def create_port(self, tenant_id, net_id, port_state=None, **kwargs):
         port = db.port_create(net_id, port_state,
             op_status=OperationalStatus.DOWN)
-        # TBD: create port on bridge
-        return port_dict(port)
+        try:
+            plugin_db.allocate_udp_for_port(net_id, port[UUID])
+            return port_dict(port)
+        except Exception:
+            db.port_destroy(port[UUID], net_id)
+            raise
 
     @auth_tenant_net_port
     def update_port(self, tenant_id, net_id, port_id, **kwargs):
         port = db.port_update(port_id, net_id, **kwargs)
-        # TBD: validate check port state (???)
+        # TODO: validate check port state (???)
         return port_dict(port)
 
     @auth_tenant_net_port
@@ -122,6 +142,10 @@ class DynamipsBridgePlugin(QuantumPluginBase):
         if port[INTERFACEID]:
             raise exceptions.PortInUse(port_id=port_id, net_id=net_id,
                                        att_id=port[INTERFACEID])
-        # TBD: remove port on bridge
+        plugin_db.deallocate_udp_for_port(net_id, port_id)
         db.port_destroy(port_id, net_id)
         return port_dict(port)
+
+    @auth_tenant_net_port
+    def get_udp_port(self, tenant_id, network_id, port_id):
+        return plugin_db.get_udp_for_port(network_id, port_id)
