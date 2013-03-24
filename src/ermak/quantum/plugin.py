@@ -7,9 +7,7 @@ from quantum.quantum_plugin_base import QuantumPluginBase
 from dynagen import dynamips_lib
 
 from ermak.quantum.const import *
-from ermak.quantum import configuration as conf
 from ermak.quantum import db as plugin_db
-from ermak.util.dynamips import DynamipsClient, Bridge
 
 LOG = logging.getLogger("quantum.plugin.dynamips_udp")
 dynamips_lib.debug = LOG.debug
@@ -49,11 +47,10 @@ def auth_tenant_net_port(f):
 
 class UdpSocketPlugin(QuantumPluginBase):
 
-    supported_extension_aliases = ['udp-channels']
+    supported_extension_aliases = ['udp-channels', 'port-metadata']
 
     def __init__(self):
-        db.configure_db({'sql_connection': conf.DB_SQL_CONNECTION,
-                         'reconnect_interval': conf.DB_RECONNECT_INTERVAL})
+        plugin_db.initialize()
 
     def get_all_networks(self, tenant_id, **kwargs):
         network_list = db.network_list(tenant_id)
@@ -149,3 +146,11 @@ class UdpSocketPlugin(QuantumPluginBase):
     @auth_tenant_net_port
     def get_udp_port(self, tenant_id, network_id, port_id):
         return plugin_db.get_udp_for_port(network_id, port_id)
+
+    @auth_tenant_net_port
+    def get_port_attrs(self, tenant_id, network_id, port_id):
+        return plugin_db.get_attrs_for_port(port_id)
+
+    @auth_tenant_net_port
+    def set_port_attrs(self, tenant_id, network_id, port_id, metadata):
+        return plugin_db.set_attrs_for_port(port_id, metadata)

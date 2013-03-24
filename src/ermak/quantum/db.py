@@ -6,6 +6,7 @@ import quantum.db.api as db
 from ermak.quantum import models
 from ermak.quantum import configuration
 from ermak.quantum import exceptions as plugin_exc
+from sqlalchemy.orm.exc import NoResultFound
 
 
 def initialize():
@@ -101,3 +102,25 @@ def get_udp_for_port(net_uuid, port_uuid):
             port_uuid, link.right, link.port, link.left, link.port)
     else:
         raise AssertionError("Unexpected state")
+
+
+def get_attrs_for_port(port_uuid):
+    session = db.get_session()
+    try:
+        info = session.query(models.PortAttributes) \
+            .filter_by(port_uuid=port_uuid).one()
+        return info.attributes
+    except NoResultFound:
+        return {}
+
+
+def set_attrs_for_port(port_uuid, attributes):
+    session = db.get_session()
+    try:
+        info = session.query(models.PortAttributes)\
+            .filter_by(port_uuid=port_uuid).one()
+        info.attributes = attributes
+    except NoResultFound:
+        info = models.PortAttributes(port_uuid, attributes)
+    session.add(info)
+    session.flush()
