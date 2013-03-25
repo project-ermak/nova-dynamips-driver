@@ -1,7 +1,7 @@
 from configobj import ConfigObj
-from quantum.common.config import find_config_file
+from quantum.common.utils import find_config_file
 
-_CONF_FILE = find_config_file({'plugin': 'udp_socket_plugin'}, None,
+_CONF_FILE = find_config_file({'plugin': 'udp_socket_plugin'},
     "udp_socket_plugin.ini")
 _CONF_PARSER_OBJ = ConfigObj(_CONF_FILE)
 

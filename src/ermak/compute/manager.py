@@ -6,8 +6,8 @@ from nova.compute.manager import publisher_id, wrap_instance_fault
 from nova import exception
 from nova import flags
 import nova.image
-from nova import log as logging
-from nova.notifier import api as notifier
+from nova.openstack.common import log as logging
+from nova.openstack.common.notifier import api as notifier
 from nova import utils
 
 from ermak import ajaxterm
@@ -19,12 +19,10 @@ class ComputeManager(nova.compute.manager.ComputeManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @wrap_instance_fault
-    def get_vnc_console(self, context, instance_uuid, console_type):
+    def get_vnc_console(self, context, console_type, instance):
         """Return connection information for a vnc console."""
         context = context.elevated()
-        LOG.debug(_("instance %s: getting vnc console"), instance_uuid)
-        instance_ref = self.db.instance_get_by_uuid(context, instance_uuid)
-
+        LOG.debug(_("Getting vnc console"), instance=instance)
         token = str(utils.gen_uuid())
 
         if console_type == 'novnc':
@@ -40,7 +38,7 @@ class ComputeManager(nova.compute.manager.ComputeManager):
 
         # Retrieve connect info from driver, and then decorate with our
         # access info token
-        connect_info = self.driver.get_vnc_console(instance_ref)
+        connect_info = self.driver.get_vnc_console(instance)
         connect_info['token'] = token
         connect_info['access_url'] = access_url
 

@@ -33,16 +33,14 @@ if os.path.exists(os.path.join(possible_topdir, 'ermak', '__init__.py')):
 
 
 from nova import flags
-from nova import log as logging
+from nova.openstack.common import log as logging
 from nova import service
-from nova import utils
 from ermak.ajaxterm import ajaxterm_proxy
 
 
 if __name__ == "__main__":
-    utils.default_flagfile()
-    flags.FLAGS(sys.argv)
-    logging.setup()
+    flags.parse_args(sys.argv)
+    logging.setup("nova")
 
     wsgi_server = ajaxterm_proxy.get_wsgi_server()
     service.serve(wsgi_server)

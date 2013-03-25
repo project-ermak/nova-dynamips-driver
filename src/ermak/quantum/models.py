@@ -1,14 +1,12 @@
-from sqlalchemy import Column, Integer, String, Boolean
+from quantum.db.model_base import BASEV2
+from sqlalchemy import Column, Integer, String
 
 import json
-from quantum.db.models import BASE
-from quantum.db.models import QuantumBase
+
 from sqlalchemy.schema import ForeignKey, PrimaryKeyConstraint
-from quantum.const import PORT_ID
 
 
-class UdpLink(BASE, QuantumBase):
-    __tablename__ = 'udp_links'
+class UdpLink(BASEV2):
     __table_args__ = (
         PrimaryKeyConstraint("cidr"),
     )
@@ -29,17 +27,16 @@ class UdpLink(BASE, QuantumBase):
         self.port = port
 
     def __repr__(self):
-        return "<UdpLink(%s)>" % (self.cidr)
+        return "<UdpLink(%s)>" % self.cidr
 
 
-class PortAttributes(BASE, QuantumBase):
-    __tablename__ = 'port_attrs'
+class PortAttribute(BASEV2):
     __table_args__ = (
             PrimaryKeyConstraint("port_uuid"),
         )
 
     port_uuid = Column(String(255),
-        ForeignKey('ports.uuid', ondelete='CASCADE'), nullable=True)
+        ForeignKey('ports.id', ondelete='CASCADE'), nullable=True)
     attributes_json = Column(String(255), nullable=False)
 
     def __init__(self, port_uuid, data):
@@ -70,9 +67,9 @@ class UdpChannelPort(object):
         self.port_id = port_id
 
     def __iter__(self):
-        data = {'src_address': self.src_address,
-                'src_port': self.src_port,
-                'dst_address': self.dst_address,
-                'dst_port': self.dst_port,
-                PORT_ID: self.port_id}
+        data = {'src-address': self.src_address,
+                'src-port': self.src_port,
+                'dst-address': self.dst_address,
+                'dst-port': self.dst_port,
+                'port-id': self.port_id}
         return data.iteritems()

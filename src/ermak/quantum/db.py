@@ -25,11 +25,10 @@ def init_nets(session):
 
 
 def are_nets_initialized(session):
-    return session.query(func.count(models.UdpLink.net_uuid)).scalar() > 0
+    return session.query(func.count(models.UdpLink.cidr)).scalar() > 0
 
 
-def allocate_udp_link(net_uuid):
-    session = db.get_session()
+def allocate_udp_link(session, net_uuid):
     if not are_nets_initialized(session):
         init_nets(session)
     try:
@@ -42,8 +41,7 @@ def allocate_udp_link(net_uuid):
     return link
 
 
-def deallocate_udp_link(net_uuid):
-    session = db.get_session()
+def deallocate_udp_link(session, net_uuid):
     link = session.query(models.UdpLink).filter_by(net_uuid=net_uuid).one()
     link.net_uuid = None
     session.add(link)
@@ -51,8 +49,7 @@ def deallocate_udp_link(net_uuid):
     return link
 
 
-def allocate_udp_for_port(net_uuid, port_uuid):
-    session = db.get_session()
+def allocate_udp_for_port(session, net_uuid, port_uuid):
     link = session.query(models.UdpLink).filter_by(net_uuid=net_uuid).one()
     try:
         if link.left_port_uuid is None:
@@ -68,8 +65,7 @@ def allocate_udp_for_port(net_uuid, port_uuid):
         session.flush()
 
 
-def deallocate_udp_for_port(net_uuid, port_uuid):
-    session = db.get_session()
+def deallocate_udp_for_port(session, net_uuid, port_uuid):
     link = session.query(models.UdpLink)\
         .filter(
             models.UdpLink.net_uuid == net_uuid,
@@ -87,8 +83,7 @@ def deallocate_udp_for_port(net_uuid, port_uuid):
         session.flush()
 
 
-def get_udp_for_port(net_uuid, port_uuid):
-    session = db.get_session()
+def get_udp_for_port(session, net_uuid, port_uuid):
     link = session.query(models.UdpLink)\
         .filter(
             models.UdpLink.net_uuid == net_uuid,
@@ -104,23 +99,21 @@ def get_udp_for_port(net_uuid, port_uuid):
         raise AssertionError("Unexpected state")
 
 
-def get_attrs_for_port(port_uuid):
-    session = db.get_session()
+def get_attrs_for_port(session, port_uuid):
     try:
-        info = session.query(models.PortAttributes) \
+        info = session.query(models.PortAttribute) \
             .filter_by(port_uuid=port_uuid).one()
         return info.attributes
     except NoResultFound:
         return {}
 
 
-def set_attrs_for_port(port_uuid, attributes):
-    session = db.get_session()
+def set_attrs_for_port(session, port_uuid, attributes):
     try:
-        info = session.query(models.PortAttributes)\
+        info = session.query(models.PortAttribute)\
             .filter_by(port_uuid=port_uuid).one()
         info.attributes = attributes
     except NoResultFound:
-        info = models.PortAttributes(port_uuid, attributes)
+        info = models.PortAttribute(port_uuid, attributes)
     session.add(info)
     session.flush()

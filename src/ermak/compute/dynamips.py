@@ -1,15 +1,13 @@
-import uuid
+import random
+from nova.utils import ensure_tree, execute
 import re
 import os
-import subprocess
 
-from nova import flags, utils, exception, db
-from nova import log as logging
-from nova import exception
+from nova import flags, exception, db
+from nova.openstack.common import log as logging
 from nova.openstack.common import cfg
 from nova.virt import images
-from nova.virt.libvirt import utils as libvirt_utils
-from nova.virt.driver import ComputeDriver, InstanceInfo
+from nova.virt.driver import ComputeDriver
 from nova.compute import instance_types
 from nova.compute import power_state
 
@@ -34,7 +32,44 @@ FLAGS.register_opts(dynamips_opts)
 
 
 def get_connection(read_only=False):
-    return DynamipsDriver()  # TODO: readonly support
+    return DynamipsDriver(read_only)
+
+
+def is_port_open(port):
+    # netcat will exit with 0 only if the port is in use,
+    # so a nonzero return value implies it is unused
+    cmd = 'netcat', '0.0.0.0', port, '-w', '1'
+    try:
+        stdout, stderr = execute(*cmd, process_input='')
+        return False
+    except exception.ProcessExecutionError:
+        return True
+
+
+class PortPool(object):
+
+    def __init__(self, start_port, end_port):
+        self._ports = {}
+        self._leases = {}
+        self._start_port = start_port
+        self._end_port = end_port
+
+    def acquire(self, lease):
+        port = self._leases.get(lease)
+        if port:
+            return port
+        for i in xrange(0, 100):  # don't loop forever
+            port = random.randint(self._start_port, self._end_port)
+            if port not in self._ports and not is_port_open(port):
+                self._ports[port] = lease
+                self._leases[lease] = port
+                return port
+
+    def release(self, lease):
+        port = self._leases.get(lease)
+        if port:
+            del self._leases[lease]
+            del self._ports[lease]
 
 
 class RouterWrapper(object):
@@ -68,24 +103,27 @@ class RouterWrapper(object):
     def os_prototype(self, instance):
         self.__os_prototype = instance
 
-    def start_ajaxterm(self):
-        start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
-        port = libvirt_utils.get_open_port(int(start_port), int(end_port))
+    def start_ajaxterm(self, port):
+        # TODO: ajaxterm restart logic required
         args = ["ajaxterm",
                 "-p", str(port), # TODO: config host too
                 "-d",
                 "--command", "telnet -E localhost %s" % self.console]
         LOG.debug("Spawning process: %s" % args)
-        self.__ajaxterm_process = libvirt_utils.execute(*args)
+        self.__ajaxterm_process = execute(*args)
         return FLAGS.vncserver_proxyclient_address, port
 
 
 class DynamipsDriver(ComputeDriver):
     """Driver for Dynamips CISCO emulator."""
 
-    def __init__(self):
+    def __init__(self, read_only=False):
+        super(DynamipsDriver, self).__init__()
         self._routers = {}
         self.dynamips = DynamipsClient(FLAGS.dynamips_host, FLAGS.dynamips_port)
+        start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
+        start_port, end_port = int(start_port), int(end_port)
+        self._port_pool = PortPool(start_port, end_port)
 
     def init_host(self, host):
         pass
@@ -95,7 +133,7 @@ class DynamipsDriver(ComputeDriver):
         return {
             'state': n.os_state,
             'max_mem': int(instance_types
-                         .get_instance_type(n.os_prototype.instance_type_id)
+                         .get_instance_type(n.os_prototype['instance_type_id'])
                          .get("memory_mb")) * 1024,
             'mem': n.ram * 1024,
             'num_cpu': 1,
@@ -139,7 +177,8 @@ class DynamipsDriver(ComputeDriver):
     def _instance_to_router(self, context, instance):
         inst_type = \
             instance_types.get_instance_type(instance["instance_type_id"])
-        chassis = db.instance_metadata_get(context, instance.id).get("chassis")
+        chassis = \
+            db.instance_metadata_get(context, instance["id"]).get("chassis")
         C = self._class_for_instance(instance, inst_type)
         r = C(self.dynamips, name=instance["id"], chassis=chassis)
         r.os_name = instance["name"]
@@ -150,16 +189,12 @@ class DynamipsDriver(ComputeDriver):
     def _setup_image(self, context, instance):
         base_dir = os.path.join(FLAGS.instances_path, FLAGS.base_dir_name)
         if not os.path.exists(base_dir):
-            libvirt_utils.ensure_tree(base_dir)
+            ensure_tree(base_dir)
         path = os.path.abspath(os.path.join(base_dir, instance["image_ref"]))
         if not os.path.exists(path):
             images.fetch_to_raw(context, instance["image_ref"], path,
                 instance["user_id"], instance["project_id"])
         return path
-
-    def list_instances_detail(self):
-        return map(lambda i: InstanceInfo(i.os_name, i.os_state),
-            self._routers.itervalues())
 
     def _do_run_instance(self, context, instance):
         self._do_create_instance(context, instance)
@@ -172,8 +207,8 @@ class DynamipsDriver(ComputeDriver):
         r.mmap = False
         self._routers[instance["id"]] = r
 
-    def spawn(self, context, instance, image_meta,
-              network_info=None, block_device_info=None):
+    def spawn(self, context, instance, image_meta, injected_files,
+              admin_password, network_info=None, block_device_info=None):
         self._do_run_instance(context, instance)
 
     def destroy(self, instance, network_info, block_device_info=None):
@@ -183,24 +218,18 @@ class DynamipsDriver(ComputeDriver):
             r = None
 
         if r is not None:
-            r.stop() # TODO: error "unable to stop instance" may occurs
+            r.stop() # TODO: error "unable to stop instance" may occur
             r.delete()
             del self._routers[r.name]
-            # remove IOS image (?)
-            # remove ramdisks (?)
+            # TODO: remove IOS image (?)
+            # TODO: remove ramdisks (?)
 
 
-    def reboot(self, instance, network_info, reboot_type):
+    def reboot(self, instance, network_info, reboot_type,
+               block_device_info=None):
         r = self._routers[instance["id"]]
         r.stop()
         r.start()
-
-    def snapshot_instance(self, context, instance_id, image_id):
-        """
-        Save current state of flash (?) and config
-        """
-        # TODO: dunno
-        raise NotImplementedError()
 
     def get_console_pool_info(self, console_type):
         # TODO: dunno
@@ -210,15 +239,17 @@ class DynamipsDriver(ComputeDriver):
         # TODO: dunno
         raise NotImplementedError()
 
+    @exception.wrap_exception()
     def get_vnc_console(self, instance):
         """Get host and port for TELNET console on instance
 
         Desperate its name, VNC console infrastructure is suitable for
         any protocols, including SSH and TELNET.
         """
-        # TODO: wrap in SSL
+        LOG.debug("Available instance ids are: %s" % self._routers.keys())
         r = self._routers[instance["id"]]
-        host, port = r.start_ajaxterm()
+        port = self._port_pool.acquire(instance["id"])
+        host, port = r.start_ajaxterm(port)
         return {'host': host, 'port': port, 'internal_access_path': None}
 
     def get_diagnostics(self, instance):
@@ -280,7 +311,8 @@ class DynamipsDriver(ComputeDriver):
         except exception.NotFound:
             return power_state.NOSTATE
 
-    def resume_state_on_host_boot(self, context, instance, network_info):
+    def resume_state_on_host_boot(self, context, instance, network_info,
+                                  block_device_info=None):
         """resume guest state when a host is booted"""
         current_state = self._current_state_for_instance(instance)
         if current_state == power_state.NOSTATE:
@@ -295,12 +327,10 @@ class DynamipsDriver(ComputeDriver):
 
     def rescue(self, context, instance, network_info, image_meta):
         """Rescue the specified instance"""
-        # TODO: wtf
         raise NotImplementedError()
 
     def unrescue(self, instance, network_info):
         """Unrescue the specified instance"""
-        # TODO: wtf
         raise NotImplementedError()
 
     def power_off(self, instance):
@@ -311,7 +341,7 @@ class DynamipsDriver(ComputeDriver):
         """Power on the specified instance"""
         self._routers[instance["id"]].start() # TODO: semantics may differ
 
-    def update_available_resource(self, ctxt, host):
+    def get_available_resource(self):
         """Updates compute manager resource info on ComputeNode table.
 
         This method is called when nova-compute launches, and
@@ -321,13 +351,6 @@ class DynamipsDriver(ComputeDriver):
         :param host: hostname that compute manager is currently running
 
         """
-        try:
-            service_ref = db.service_get_all_compute_by_host(ctxt, host)[0]
-        except exception.NotFound:
-            raise exception.ComputeServiceUnavailable(host=host)
-
-        # Updating host information
-        # TODO implement
         dic = {'vcpus': 1,
                'memory_mb': 4096,
                'local_gb': 1028,
@@ -336,16 +359,8 @@ class DynamipsDriver(ComputeDriver):
                'local_gb_used': 0,
                'hypervisor_type': 'dynamips',
                'hypervisor_version': '0.2.7+',
-               'service_id': service_ref['id'],
                'cpu_info': '?'}
-
-        compute_node_ref = service_ref['compute_node']
-        if not compute_node_ref:
-            LOG.info(_('Compute_service record created for %s ') % host)
-            db.compute_node_create(ctxt, dic)
-        else:
-            LOG.info(_('Compute_service record updated for %s ') % host)
-            db.compute_node_update(ctxt, compute_node_ref[0]['id'], dic)
+        return dic
 
     def refresh_security_group_rules(self, security_group_id):
         """This method is called after a change to security groups.
@@ -416,39 +431,7 @@ class DynamipsDriver(ComputeDriver):
 
     def reset_network(self, instance):
         """reset networking for specified instance"""
-        # TODO: wtf
         pass
-
-    def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
-        """Setting up filtering rules and waiting for its completion.
-
-        To migrate an instance, filtering rules to hypervisors
-        and firewalls are inevitable on destination host.
-        ( Waiting only for filtering rules to hypervisor,
-        since filtering rules to firewall rules can be set faster).
-
-        Concretely, the below method must be called.
-        - setup_basic_filtering (for nova-basic, etc.)
-        - prepare_instance_filter(for nova-instance-instance-xxx, etc.)
-
-        to_xml may have to be called since it defines PROJNET, PROJMASK.
-        but libvirt migrates those value through migrateToURI(),
-        so , no need to be called.
-
-        Don't use thread for this method since migration should
-        not be started when setting-up filtering rules operations
-        are not completed.
-
-        :params instance_ref: nova.db.sqlalchemy.models.Instance object
-
-        """
-        # TODO: stub, no meaning for us
-        raise NotImplementedError()
-
-    def unfilter_instance(self, instance, network_info):
-        """Stop filtering instance"""
-        # TODO: wtf
-        raise NotImplementedError()
 
     def set_admin_password(self, context, instance_id, new_pass=None):
         """
@@ -471,26 +454,11 @@ class DynamipsDriver(ComputeDriver):
         written on the instance; the third is the contents of the file, also
         base64-encoded.
         """
-        # TODO: stub, no meaning for us (?)
+        # TODO: may be used for injecting config files
         raise NotImplementedError()
 
-    def agent_update(self, instance, url, md5hash):
-        """
-        Update agent on the specified instance.
-
-        The first parameter is an instance of nova.compute.service.Instance,
-        and so the instance is being specified as instance.name. The second
-        parameter is the URL of the agent to be fetched and updated on the
-        instance; the third is the md5 hash of the file for verification
-        purposes.
-        """
-        # TODO: wtf
-        raise NotImplementedError()
-
-    def inject_network_info(self, instance, nw_info):
-        """inject network info for specified instance"""
-        # TODO: stub, no meaning for us
-        pass
+    # agent_update
+    # inject_network_info
 
     def poll_rebooting_instances(self, timeout):
         """Poll for rebooting instances"""
@@ -500,11 +468,6 @@ class DynamipsDriver(ComputeDriver):
     def poll_rescued_instances(self, timeout):
         """Poll for rescued instances"""
         # TODO: wtf is rescue?
-        raise NotImplementedError()
-
-    def poll_unconfirmed_resizes(self, resize_confirm_window):
-        """Poll for unconfirmed resizes."""
-        # TODO: wtf
         raise NotImplementedError()
 
     def host_power_action(self, host, action):
@@ -525,14 +488,10 @@ class DynamipsDriver(ComputeDriver):
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
-        # TODO: configure and start NIO brige
-        # raise NotImplementedError()
         pass
 
     def unplug_vifs(self, instance, network_info):
         """Unplug VIFs from networks."""
-        # TODO: unconfigure NIO bridge
-        #raise NotImplementedError()
         pass
 
     def update_host_status(self):
@@ -542,7 +501,7 @@ class DynamipsDriver(ComputeDriver):
 
     def get_host_stats(self, refresh=False):
         """Return currently known host stats"""
-        # TODO: wtf
+        # TODO: implement
         # raise NotImplementedError()
         return {
             'host_name-description': 'Fake Host',
@@ -560,17 +519,7 @@ class DynamipsDriver(ComputeDriver):
             'host_uuid': 'cedb9b39-9388-41df-8891-c5c9a0c0fe5f',
             'host_name_label': 'fake-mini'}
 
-    def list_disks(self, instance_name):
-        """
-        Return the IDs of all the virtual disks attached to the specified
-        instance, as a list.  These IDs are opaque to the caller (they are
-        only useful for giving back to this layer as a parameter to
-        disk_stats).  These IDs only need to be unique for a given instance.
-
-        Note that this function takes an instance ID.
-        """
-        # TODO: no meaning for us
-        raise NotImplementedError()
+    # list_disks
 
     def list_interfaces(self, instance_name):
         """
@@ -582,39 +531,9 @@ class DynamipsDriver(ComputeDriver):
 
         Note that this function takes an instance ID.
         """
-        # TODO: cXXXX show_hardware
+        # TODO: cXXXX show_hardware (?)
         raise NotImplementedError()
 
-    def resize(self, instance, flavor):
-        """
-        Resizes/Migrates the specified instance.
-
-        The flavor parameter determines whether or not the instance RAM and
-        disk space are modified, and if so, to what size.
-        """
-        # TODO: vm set_ram
-        raise NotImplementedError()
-
-    def block_stats(self, instance_name, disk_id):
-        """
-        Return performance counters associated with the given disk_id on the
-        given instance_name.  These are returned as [rd_req, rd_bytes, wr_req,
-        wr_bytes, errs], where rd indicates read, wr indicates write, req is
-        the total number of I/O requests made, bytes is the total number of
-        bytes transferred, and errs is the number of requests held up due to a
-        full pipeline.
-
-        All counters are long integers.
-
-        This method is optional.  On some platforms (e.g. XenAPI) performance
-        statistics can be retrieved directly in aggregate form, without Nova
-        having to do the aggregation.  On those platforms, this method is
-        unused.
-
-        Note that this function takes an instance ID.
-        """
-        # TODO: no meaning for us
-        raise NotImplementedError()
 
     def interface_stats(self, instance_name, iface_id):
         """
@@ -637,13 +556,6 @@ class DynamipsDriver(ComputeDriver):
         # TODO: may be useful, through direct connection and parsing maybe
         raise NotImplementedError()
 
-    def legacy_nwinfo(self):
-        """
-        Indicate if the driver requires the legacy network_info format.
-        """
-        # TODO: wtf
-        return True
-
     def manage_image_cache(self, context):
         """
         Manage the driver's local image cache.
@@ -653,7 +565,8 @@ class DynamipsDriver(ComputeDriver):
         related to other calls into the driver. The prime example is to clean
         the cache and remove images which are no longer of interest.
         """
-        # TODO: wtf
+        # TODO: implement
+        pass
 
     def add_to_aggregate(self, context, aggregate, host, **kwargs):
         """Add a compute host to an aggregate."""
@@ -665,18 +578,4 @@ class DynamipsDriver(ComputeDriver):
         # TODO: wtf
         raise NotImplementedError()
 
-    def get_volume_connector(self, instance):
-        """Get connector information for the instance for attaching to volumes.
-
-        Connector information is a dictionary representing the ip of the
-        machine that will be making the connection and and the name of the
-        iscsi initiator as follows::
-
-            {
-                'ip': ip,
-                'initiator': initiator,
-            }
-        """
-        # TODO: no meaning for us (nvram?)
-        raise NotImplementedError()
 

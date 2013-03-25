@@ -19,23 +19,18 @@
 
 """Eventlet WSGI Service to proxy VNC for XCP protocol."""
 
-import socket
-from urllib import urlencode
 from urllib2 import URLError
 from urlparse import urlparse, parse_qs, urlunparse
 import webob
 
-import eventlet
-import eventlet.green
 from eventlet.green import urllib2
-import eventlet.greenio
-import eventlet.wsgi
 
 from nova import context
 from nova import flags
-from nova import log as logging
+from nova.consoleauth import rpcapi
+from nova.openstack.common import log as logging
 from nova.openstack.common import cfg
-from nova import rpc
+from nova.openstack.common import rpc
 from nova import version
 from nova import wsgi
 
@@ -62,6 +57,9 @@ def token_from_url(url):
 class AjaxTermConsoleProxy(object):
     """Class to use the ajaxterm protocol to proxy ajaxterm consoles."""
 
+    def __init__(self):
+        self._consoleauth = rpcapi.ConsoleAuthAPI()
+
     def __call__(self, environ, start_response):
         try:
             req = webob.Request(environ)
@@ -75,9 +73,7 @@ class AjaxTermConsoleProxy(object):
                 return "Invalid Request"
 
             ctxt = context.get_admin_context()
-            connect_info = rpc.call(ctxt, FLAGS.consoleauth_topic,
-                    {'method': 'check_token',
-                     'args': {'token': token}})
+            connect_info =  self._consoleauth.check_token(ctxt, token)
 
             if not connect_info:
                 LOG.audit(_("Request made with invalid token: %s"), req)

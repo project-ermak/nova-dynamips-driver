@@ -6,7 +6,6 @@ from quantum.api import faults
 from quantum.common import exceptions as qexception
 from quantum.extensions import extensions
 from quantum.manager import QuantumManager
-from quantum.const import UUID, PORT_ID
 
 
 LOG = logging.getLogger("quantum.api.portstats")
@@ -58,20 +57,19 @@ class PortsMetadataController(wsgi.Controller):
                 qexception.NotImplementedError("get_port_attrs"))
         meta = self._plugin.get_port_attrs(
             tenant_id, network_id, port_id)
-        return {'attributes': meta, PORT_ID: port_id}
+        return {'attributes': meta, 'id': port_id}
 
     def index(self, request, tenant_id, network_id):
         ports = self._plugin.get_all_ports(tenant_id, network_id)
         def view(port):
             return self._port_view(
-                request, tenant_id, network_id, port[PORT_ID])
+                request, tenant_id, network_id, port['id'])
         result = map(view, ports)
         return {'ports': result}
 
     def show(self, request, tenant_id, network_id, id):
-        port = self._plugin.get_port_details(tenant_id, network_id, id)
         port_viewmodel = self._port_view(
-            request, tenant_id, network_id, port[PORT_ID])
+            request, tenant_id, network_id, id)
         return {'port': port_viewmodel}
 
     def update(self, request, tenant_id, network_id, id):
