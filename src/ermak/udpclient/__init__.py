@@ -6,8 +6,7 @@ class QuantumUdpClient(Client):
     channel_path =\
     "/extensions/udp/tenants/%s/networks/%s/channels/%s"
 
-    attr_path = "/extensions/attributes/tenants/%s" +\
-                "/networks/%s/networks/%s/ports/%s"
+    attr_path = "/extensions/attributes/tenants/%s/networks/%s/ports/%s"
 
     def __init__(self, *args, **kwargs):
         super(QuantumUdpClient, self).__init__(*args, **kwargs)

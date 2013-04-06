@@ -1,5 +1,4 @@
 from nova.openstack.common import cfg
-from nova import db
 from nova import flags
 from nova import exception
 from nova.openstack.common import log as logging
@@ -21,10 +20,9 @@ LOG = logging.getLogger("nova.virt.vif")
 class QuantumUdpChannelVIFDriver(vif.VIFDriver):
 
     def plug(self, instance, vif, **kwargs):
-        (network, mapping) = vif
         iface = FLAGS.data_iface
-        port_info = mapping['meta']['quantum_udp_port_info']
-        port_attrs = mapping['meta']['quantum_port_attrs']
+        port_info = vif['meta']['quantum_udp_port_info']
+        port_attrs = vif['meta']['quantum_port_attrs']
         try:
             utils.execute('ip', 'addr', 'add',
                           'dev', iface,
@@ -33,7 +31,7 @@ class QuantumUdpChannelVIFDriver(vif.VIFDriver):
             LOG.warning(_("Failed while pluggin vif of instance '%s'"),
                 instance['name'])
         result = {
-            'mac_address': mapping['address'],
+            'mac_address': vif['address'],
             'src_address': port_info['src-address'],
             'src_port': port_info['src-port'],
             'dst_address': port_info['dst-address'],
@@ -43,9 +41,9 @@ class QuantumUdpChannelVIFDriver(vif.VIFDriver):
         return result
 
     def unplug(self, instance, vif, **kwargs):
-        (network, mapping) = vif
         iface = FLAGS.data_iface
-        port_info = mapping['meta']['quantum_udp_port_info']
+        # TODO: no info here when deleting :(
+        port_info = vif['meta']['quantum_udp_port_info']
         try:
             utils.execute('ip', 'addr', 'delete',
                           'dev', iface,

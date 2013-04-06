@@ -10,9 +10,11 @@ from nova.virt import images
 from nova.virt.driver import ComputeDriver
 from nova.compute import instance_types
 from nova.compute import power_state
+from dynagen.dynamips_lib import NIO_udp
 
 import ermak.ajaxterm
 from dynagen import dynamips_lib
+from ermak.compute.vif import QuantumUdpChannelVIFDriver
 from ermak.util.dynamips import DynamipsClient
 
 LOG = logging.getLogger("nova.virt.dynamips")
@@ -124,9 +126,13 @@ class DynamipsDriver(ComputeDriver):
         start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
         start_port, end_port = int(start_port), int(end_port)
         self._port_pool = PortPool(start_port, end_port)
+        self._vif_driver = QuantumUdpChannelVIFDriver()
 
     def init_host(self, host):
         pass
+
+    def legacy_nwinfo(self):
+        return False
 
     def get_info(self, instance):
         n = self._router_by_name(instance["name"])
@@ -196,20 +202,40 @@ class DynamipsDriver(ComputeDriver):
                 instance["user_id"], instance["project_id"])
         return path
 
-    def _do_run_instance(self, context, instance):
-        self._do_create_instance(context, instance)
-        self._router_by_name(instance["name"]).start()
+    def _setup_network(self, context, router, instance, network_info):
+        for vif in network_info:
+            conn_info = self._vif_driver.plug(instance, vif)
+            adapter = router.slot[conn_info['slot_id']]
+            nio = NIO_udp(
+                self.dynamips,
+                conn_info['src_port'],
+                conn_info['dst_address'],
+                conn_info['dst_port'],
+                adapter=adapter,
+                port=conn_info['port_id'])
+            adapter.nio(conn_info['port_id'], nio)
+            # TODO: create Dynamips NIO
 
-    def _do_create_instance(self, context, instance):
+    def _tear_down_network(self, instance, network_info):
+        for vif in network_info:
+            try:
+                self._vif_driver.unplug(instance, vif)
+            except Exception as e:
+                LOG.error("Can not deallocate vif %s" % vif, e)
+
+    def _do_create_instance(self, context, instance, network_info):
         image = self._setup_image(context, instance)
         r = self._instance_to_router(context, instance)
+        self._setup_network(context, r, instance, network_info)
         r.image = image
         r.mmap = False
         self._routers[instance["id"]] = r
 
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info=None, block_device_info=None):
-        self._do_run_instance(context, instance)
+              admin_password, network_info=[], block_device_info=None):
+        LOG.debug("Spawning with network info %s" % network_info)
+        self._do_create_instance(context, instance, network_info)
+        self._router_by_name(instance["name"]).start()
 
     def destroy(self, instance, network_info, block_device_info=None):
         try:
@@ -220,6 +246,7 @@ class DynamipsDriver(ComputeDriver):
         if r is not None:
             r.stop() # TODO: error "unable to stop instance" may occur
             r.delete()
+            self._tear_down_network(instance, network_info)
             del self._routers[r.name]
             # TODO: remove IOS image (?)
             # TODO: remove ramdisks (?)

@@ -28,7 +28,8 @@ class Port(SchemaDocument):
     structure = {
         'device': unicode,
         'slot': int,
-        'port': int}
+        'port': int,
+        'quantum_id': basestring}
     required_fields = ['device', 'slot', 'port']
 
 

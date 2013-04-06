@@ -5,7 +5,6 @@ from quantum.api import faults
 from quantum.common import exceptions as qexception
 from quantum.extensions import extensions
 from quantum.manager import QuantumManager
-from quantum.const import UUID, PORT_ID
 
 
 LOG = logging.getLogger("quantum.api.portstats")
@@ -63,13 +62,12 @@ class UdpChannelsController(wsgi.Controller):
         ports = self._plugin.get_all_ports(tenant_id, network_id)
         def view(port):
             return self._port_view(
-                request, tenant_id, network_id, port[PORT_ID])
+                request, tenant_id, network_id, port['id'])
         result = map(view, ports)
         return {'channels': result}
 
     def show(self, request, tenant_id, network_id, id):
-        port = self._plugin.get_port_details(tenant_id, network_id, id)
         port_viewmodel = self._port_view(
-            request, tenant_id, network_id, port[PORT_ID])
+            request, tenant_id, network_id, id)
         return {'channel': port_viewmodel}
 

@@ -1,0 +1,13 @@
+ENT=$1
+CMD=$2
+IFACE=$4
+IP=$5
+
+if [ "x$ENT" = "xaddr" ]; then
+  if [ "x$CMD" = "xadd" ]; then
+    ifconfig $IFACE alias $IP
+  fi
+  if [ "x$CMD" = "xdelete" ]; then
+    ifconfig $IFACE -alias $IP
+  fi
+fi

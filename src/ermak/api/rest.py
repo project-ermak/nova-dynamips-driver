@@ -5,10 +5,15 @@ from flask import Flask, request
 from mongokit.schema_document import ValidationError
 import logging
 
-from ermak.api import db, facade
+from ermak.api import db
+from ermak.api.openstack import OpenStackFacade
 from ermak.api.views import *
 
 app = Flask(__name__)
+#app.facade = FakeFacade()
+app.facade = OpenStackFacade(
+    nova='http://localhost:8774/v2',
+    quantum='http://localhost:9696')
 
 
 def api_response(payload = None, status=200, headers=None):
@@ -18,6 +23,14 @@ def api_response(payload = None, status=200, headers=None):
     if payload is None:
         payload = {}
     return json.dumps(payload), status, all_headers
+
+
+class RequestContext(object):
+
+    def __init__(self, request=None):
+        self.username = 'admin'
+        self.api_key = 'qwerty'
+        self.tenant = 'ermak'
 
 
 @app.route("/<tenant>/instances", methods=["GET"])
@@ -51,7 +64,7 @@ def instance_create(tenant):
         instance['tenant'] = tenant
     except ValidationError as e:
         return api_response(status=400, payload={'error': str(e)})
-    saved = facade.launch_instance({}, instance)
+    saved = app.facade.launch_instance(RequestContext(request), instance)
     return api_response(status=201, payload=instance_to_json(saved))
 
 
@@ -67,10 +80,11 @@ def instance_delete(tenant, id):
     except LookupError:
         return api_response(
             status=404, payload={'error': "Instance with id %s not found" % id})
-    destroyed = facade.destroy_instance({}, instance)
+    destroyed = app.facade.destroy_instance(RequestContext(request), instance)
     return api_response(status=200, payload=instance_to_json(destroyed))
 
 
 if __name__ == '__main__':
-    db.init_db("mongodb://localhost/ermak-test")
+    db.init_db("mongodb://localhost/ermak")
+    logging.basicConfig(level=logging.DEBUG)
     app.run(debug=True)

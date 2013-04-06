@@ -39,7 +39,7 @@ class Portmetadata(object):
     def get_resources(cls):
         controller = PortsMetadataController(QuantumManager.get_plugin())
         parent_resource = dict(member_name="network",
-            collection_name="extensions/metadata/tenants/" +\
+            collection_name="extensions/attributes/tenants/" +\
                             ":(tenant_id)/networks")
         return [extensions.ResourceExtension('ports', controller,
             parent=parent_resource)]
