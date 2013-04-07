@@ -37,7 +37,7 @@ def get_connection(read_only=False):
     return DynamipsDriver(read_only)
 
 
-def is_port_open(port):
+def is_port_free(port):
     # netcat will exit with 0 only if the port is in use,
     # so a nonzero return value implies it is unused
     cmd = 'netcat', '0.0.0.0', port, '-w', '1'
@@ -62,10 +62,11 @@ class PortPool(object):
             return port
         for i in xrange(0, 100):  # don't loop forever
             port = random.randint(self._start_port, self._end_port)
-            if port not in self._ports and not is_port_open(port):
+            if port not in self._ports and is_port_free(port):
                 self._ports[port] = lease
                 self._leases[lease] = port
                 return port
+            raise Exception("Can not find free port to bind")
 
     def release(self, lease):
         port = self._leases.get(lease)

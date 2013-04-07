@@ -1,11 +1,29 @@
 from dynagen import dynamips_lib
 from dynagen.dynamips_lib import send
+from threading import Lock
+
+"""Monkey patch for dynamips_lib"""
+legacy_send = send
+
+
+def locking_send(dynamips, data):  # TODO: green threads
+    try:
+        dynamips.sock_mutex.acquire()
+        return legacy_send(dynamips, data)
+    finally:
+        dynamips.sock_mutex.release()
+
+
+send = locking_send
+dynamips_lib.send = locking_send
+
 
 class DynamipsClient(dynamips_lib.Dynamips):
 
     def __init__(self, host, port=7200, timeout=500):
         old_nosend = dynamips_lib.NOSEND
         dynamips_lib.NOSEND = True
+        self.sock_mutex = Lock()
         super(DynamipsClient, self).__init__(host, port, timeout)
         dynamips_lib.NOSEND = old_nosend
         if not dynamips_lib.NOSEND:

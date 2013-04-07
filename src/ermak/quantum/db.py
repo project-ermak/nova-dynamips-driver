@@ -16,10 +16,13 @@ def initialize():
 
 
 def init_nets(session):
+    port = configuration.UDP_PORT_START
     for net in netaddr.IPNetwork(configuration.UDP_POOL_CIDR).subnet(30):
         left, right = list(net.iter_hosts())
-        port = configuration.UDP_PORT
-        link = models.UdpLink(str(net), str(left), str(right), port)
+        if port > configuration.UDP_PORT_END:
+            break
+        link = models.UdpLink(str(net), str(left), str(right), port, port + 1)
+        port += 2
         session.add(link)
     session.flush()
 
@@ -91,10 +94,10 @@ def get_udp_for_port(session, net_uuid, port_uuid):
             (models.UdpLink.right_port_uuid == port_uuid)).one()
     if link.left_port_uuid == port_uuid:
         return models.UdpChannelPort(
-            port_uuid, link.left, link.port, link.right, link.port)
+            port_uuid, link.left, link.port_left, link.right, link.port_right)
     elif link.right_port_uuid == port_uuid:
         return models.UdpChannelPort(
-            port_uuid, link.right, link.port, link.left, link.port)
+            port_uuid, link.right, link.port_right, link.left, link.port_left)
     else:
         raise AssertionError("Unexpected state")
 

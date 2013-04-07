@@ -18,24 +18,25 @@ class UdpLink(BASEV2):
     cidr = Column(String(255), nullable=False)
     left = Column(String(255), nullable=False)
     right = Column(String(255), nullable=False)
-    port = Column(Integer, nullable=False)
+    port_left = Column(Integer, nullable=False)
+    port_right = Column(Integer, nullable=False)
 
-    def __init__(self, cidr, left, right, port):
+    def __init__(self, cidr, left, right, lport, rport):
         self.cidr = cidr
         self.left = left
         self.right = right
-        self.port = port
+        self.port_left = lport
+        self.port_right = rport
 
     def __repr__(self):
         return "<UdpLink(%s)>" % self.cidr
 
 
 class PortAttribute(BASEV2):
-    __table_args__ = (
-            PrimaryKeyConstraint("port_uuid"),
-        )
+    __table_args__ = (PrimaryKeyConstraint("port_uuid"),)
 
-    port_uuid = Column(String(255),
+    port_uuid = Column(
+        String(255),
         ForeignKey('ports.id', ondelete='CASCADE'), nullable=True)
     attributes_json = Column(String(255), nullable=False)
 
