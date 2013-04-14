@@ -1,5 +1,4 @@
 import random
-from nova.utils import ensure_tree, execute
 import re
 import os
 
@@ -10,11 +9,13 @@ from nova.virt import images
 from nova.virt.driver import ComputeDriver
 from nova.compute import instance_types
 from nova.compute import power_state
+from nova import utils
+from nova.utils import ensure_tree, execute
+from dynagen import dynamips_lib
 from dynagen.dynamips_lib import NIO_udp
 
-import ermak.ajaxterm
-from dynagen import dynamips_lib
 from ermak.compute.vif import QuantumUdpChannelVIFDriver
+from ermak.compute.vif import add_alias, delete_alias, list_addresses
 from ermak.util.dynamips import DynamipsClient
 
 LOG = logging.getLogger("nova.virt.dynamips")
@@ -22,12 +23,11 @@ dynamips_lib.debug = LOG.debug
 
 dynamips_opts = [
     cfg.StrOpt('dynamips_host',
-        default='localhost',
-        help='Connection host for dynamips'),
+               default='localhost',
+               help='Connection host for dynamips'),
     cfg.StrOpt('dynamips_port',
-        default=7200,
-        help='Connection port for dynamips')
-    ]
+               default=7200,
+               help='Connection port for dynamips')]
 FLAGS = flags.FLAGS
 flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 FLAGS.register_opts(dynamips_opts)
@@ -72,7 +72,7 @@ class PortPool(object):
         port = self._leases.get(lease)
         if port:
             del self._leases[lease]
-            del self._ports[lease]
+            del self._ports[port]
 
 
 class RouterWrapper(object):
@@ -107,13 +107,13 @@ class RouterWrapper(object):
         self.__os_prototype = instance
 
     def start_ajaxterm(self, port):
-        # TODO: ajaxterm restart logic required
-        args = ["ajaxterm",
-                "-p", str(port), # TODO: config host too
-                "-d",
-                "--command", "telnet -E localhost %s" % self.console]
-        LOG.debug("Spawning process: %s" % args)
-        self.__ajaxterm_process = execute(*args)
+        if is_port_free(port):  # ajaxterm is not listening yet
+            args = ["ajaxterm",
+                    "-p", str(port),  # TODO: config host too
+                    "-d",
+                    "--command", "telnet -E localhost %s" % self.console]
+            LOG.debug("Spawning process: %s" % args)
+            self.__ajaxterm_process = execute(*args)
         return FLAGS.vncserver_proxyclient_address, port
 
 
@@ -123,7 +123,8 @@ class DynamipsDriver(ComputeDriver):
     def __init__(self, read_only=False):
         super(DynamipsDriver, self).__init__()
         self._routers = {}
-        self.dynamips = DynamipsClient(FLAGS.dynamips_host, FLAGS.dynamips_port)
+        self.dynamips = DynamipsClient(
+            FLAGS.dynamips_host, FLAGS.dynamips_port)
         start_port, end_port = FLAGS.ajaxterm_portrange.split("-")
         start_port, end_port = int(start_port), int(end_port)
         self._port_pool = PortPool(start_port, end_port)
@@ -137,14 +138,14 @@ class DynamipsDriver(ComputeDriver):
 
     def get_info(self, instance):
         n = self._router_by_name(instance["name"])
+        mem_mb = instance_types.get_instance_type(
+            n.os_prototype['instance_type_id']).get("memory_mb")
         return {
             'state': n.os_state,
-            'max_mem': int(instance_types
-                         .get_instance_type(n.os_prototype['instance_type_id'])
-                         .get("memory_mb")) * 1024,
+            'max_mem': int(mem_mb) * 1024,
             'mem': n.ram * 1024,
             'num_cpu': 1,
-            'cpu_time': 0 # cpuinfo?
+            'cpu_time': 0  # cpuinfo?
         }
 
     def _router_by_name(self, name):
@@ -177,7 +178,8 @@ class DynamipsDriver(ComputeDriver):
 
     def _class_for_instance(self, instance, inst_type):
         class_ = self._class_for_flavor(inst_type['name'])
-        class CurrentRouter(RouterWrapper, class_): # TODO: metaclass?
+
+        class CurrentRouter(RouterWrapper, class_):  # TODO: metaclass?
             pass
         return CurrentRouter
 
@@ -199,28 +201,71 @@ class DynamipsDriver(ComputeDriver):
             ensure_tree(base_dir)
         path = os.path.abspath(os.path.join(base_dir, instance["image_ref"]))
         if not os.path.exists(path):
-            images.fetch_to_raw(context, instance["image_ref"], path,
+            images.fetch_to_raw(
+                context, instance["image_ref"], path,
                 instance["user_id"], instance["project_id"])
         return path
 
+
+    def _mklabel(self, ip):
+        return "%02x%02x%02x%02x" % tuple(map(int, ip.split('.')))
+
+    def _withmask(self, addr, prefix):
+        return str(addr) + '/' + str(prefix)
+
+    @utils.synchronized('udp_channel_setup')
     def _setup_network(self, context, router, instance, network_info):
         for vif in network_info:
-            conn_info = self._vif_driver.plug(instance, vif)
-            adapter = router.slot[conn_info['slot_id']]
+            iface = FLAGS.data_iface
+            udp_attrs = vif['meta']['quantum_udp_attrs']
+            port_attrs = vif['meta']['quantum_port_attrs']
+            on_same_machine = udp_attrs['dst-address'] in list_addresses(iface)
+            LOG.debug("UDP attrs are %s, addresses are %s, on_same_machine is %s" % (udp_attrs, list_addresses(iface), on_same_machine))
+
+            add_alias(
+                iface,
+                self._withmask(
+                    udp_attrs['src-address'], udp_attrs['prefix-len']),
+                label=self._mklabel(udp_attrs['src-address']))
+            if on_same_machine:
+                delete_alias(
+                    iface,
+                    self._withmask(
+                        udp_attrs['dst-address'], udp_attrs['prefix-len']),
+                    label=self._mklabel(udp_attrs['dst-address']))
+            adapter = router.slot[port_attrs['slot-id']]
+            LOG.debug("Creating nio to %s, addresses are %s" % (udp_attrs['dst-address'], list_addresses(iface)))
             nio = NIO_udp(
                 self.dynamips,
-                conn_info['src_port'],
-                conn_info['dst_address'],
-                conn_info['dst_port'],
+                udp_attrs['src-port'],
+                udp_attrs['dst-address'],
+                udp_attrs['dst-port'],
                 adapter=adapter,
-                port=conn_info['port_id'])
-            adapter.nio(conn_info['port_id'], nio)
-            # TODO: create Dynamips NIO
+                port=port_attrs['port-id'])
+            adapter.nio(port_attrs['port-id'], nio)
+            if on_same_machine:
+                add_alias(
+                    iface,
+                    self._withmask(
+                        udp_attrs['dst-address'], udp_attrs['prefix-len']),
+                    label=self._mklabel(udp_attrs['dst-address']))
 
-    def _tear_down_network(self, instance, network_info):
+    @utils.synchronized('udp_channel_setup')
+    def _tear_down_network(self, router, instance, network_info):
         for vif in network_info:
             try:
-                self._vif_driver.unplug(instance, vif)
+                iface = FLAGS.data_iface
+                udp_attrs = vif['meta']['quantum_udp_attrs']
+                port_attrs = vif['meta']['quantum_port_attrs']
+                adapter = router.slot[port_attrs['slot-id']]
+                (dynint, dynport) = nio.interfaces_mips2dyn[port_attrs['port-id']]
+                adapter.disconnect(dynint, dynport)
+                adapter.delete_nio(dynint, dynport)
+                delete_alias(
+                    iface,
+                    self._withmask(
+                        udp_attrs['src-address'], udp_attrs['prefix-len']),
+                    label=self._mklabel(udp_attrs['src-address']))
             except Exception as e:
                 LOG.error("Can not deallocate vif %s" % vif, e)
 
@@ -245,13 +290,12 @@ class DynamipsDriver(ComputeDriver):
             r = None
 
         if r is not None:
-            r.stop() # TODO: error "unable to stop instance" may occur
+            r.stop()  # TODO: error "unable to stop instance" may occur
+            self._tear_down_network(r, instance, network_info)
             r.delete()
-            self._tear_down_network(instance, network_info)
             del self._routers[r.name]
             # TODO: remove IOS image (?)
             # TODO: remove ramdisks (?)
-
 
     def reboot(self, instance, network_info, reboot_type,
                block_device_info=None):
@@ -363,11 +407,11 @@ class DynamipsDriver(ComputeDriver):
 
     def power_off(self, instance):
         """Power off the specified instance."""
-        self._routers[instance["id"]].stop() # TODO: semantics may differ
+        self._routers[instance["id"]].stop()  # TODO: semantics may differ
 
     def power_on(self, instance):
         """Power on the specified instance"""
-        self._routers[instance["id"]].start() # TODO: semantics may differ
+        self._routers[instance["id"]].start()  # TODO: semantics may differ
 
     def get_available_resource(self):
         """Updates compute manager resource info on ComputeNode table.
@@ -562,7 +606,6 @@ class DynamipsDriver(ComputeDriver):
         # TODO: cXXXX show_hardware (?)
         raise NotImplementedError()
 
-
     def interface_stats(self, instance_name, iface_id):
         """
         Return performance counters associated with the given iface_id on the
@@ -605,5 +648,3 @@ class DynamipsDriver(ComputeDriver):
         """Remove a compute host from an aggregate."""
         # TODO: wtf
         raise NotImplementedError()
-
-

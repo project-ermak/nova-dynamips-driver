@@ -88,7 +88,7 @@ class QuantumUdpApi(API):
                 context, net_tenant_id, quantum_net_id, port_id)
             specific_args = {
                 'quantum_net_id': quantum_net_id,
-                'quantum_udp_port_info': udp_info,
+                'quantum_udp_attrs': udp_info,
                 'quantum_port_attrs': port_attrs}
             vif['meta'].update(specific_args)
         return nw_info

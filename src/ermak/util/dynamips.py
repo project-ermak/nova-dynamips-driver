@@ -41,3 +41,9 @@ class Bridge(dynamips_lib.Bridge):
 
     def delete(self):
         send(self._d, 'nio_bridge delete ' + self._name)
+
+
+class UdpNio(dynamips_lib.NIO_udp):
+
+    def delete(self):
+        send(self._NIO_udp__d, "nio delete %s" % self._NIO_udp__name)

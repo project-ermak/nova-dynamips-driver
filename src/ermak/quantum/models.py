@@ -72,5 +72,6 @@ class UdpChannelPort(object):
                 'src-port': self.src_port,
                 'dst-address': self.dst_address,
                 'dst-port': self.dst_port,
-                'port-id': self.port_id}
+                'port-id': self.port_id,
+                'prefix-len': 30}
         return data.iteritems()
