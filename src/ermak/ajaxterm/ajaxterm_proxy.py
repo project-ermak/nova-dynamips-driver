@@ -59,6 +59,7 @@ class AjaxTermConsoleProxy(object):
 
     def __init__(self):
         self._consoleauth = rpcapi.ConsoleAuthAPI()
+        self._tokens = {}
 
     def __call__(self, environ, start_response):
         try:
@@ -73,7 +74,9 @@ class AjaxTermConsoleProxy(object):
                 return "Invalid Request"
 
             ctxt = context.get_admin_context()
-            connect_info =  self._consoleauth.check_token(ctxt, token)
+            connect_info = self._tokens.get(token)
+            if not connect_info:
+                connect_info =  self._consoleauth.check_token(ctxt, token)
 
             if not connect_info:
                 LOG.audit(_("Request made with invalid token: %s"), req)

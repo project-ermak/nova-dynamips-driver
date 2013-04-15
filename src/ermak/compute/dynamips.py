@@ -40,9 +40,9 @@ def get_connection(read_only=False):
 def is_port_free(port):
     # netcat will exit with 0 only if the port is in use,
     # so a nonzero return value implies it is unused
-    cmd = 'netcat', '0.0.0.0', port, '-w', '1'
+    cmd = 'netcat', 'localhost', port, '-z'
     try:
-        stdout, stderr = execute(*cmd, process_input='')
+        stdout, stderr = execute(*cmd)
         return False
     except exception.ProcessExecutionError:
         return True
@@ -107,7 +107,7 @@ class RouterWrapper(object):
         self.__os_prototype = instance
 
     def start_ajaxterm(self, port):
-        if is_port_free(port):  # ajaxterm is not listening yet
+        if is_port_free(port):
             args = ["ajaxterm",
                     "-p", str(port),  # TODO: config host too
                     "-d",
