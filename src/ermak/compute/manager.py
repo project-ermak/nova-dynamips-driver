@@ -19,20 +19,33 @@ class ComputeManager(nova.compute.manager.ComputeManager):
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @wrap_instance_fault
+    def validate_console_port(self, ctxt, instance, port, console_type):
+        if console_type == 'ajaxterm':
+            console_info = self.driver.get_web_console(instance)
+        else:
+            console_info = self.driver.get_vnc_console(instance)
+        return console_info['port'] == port
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @wrap_instance_fault
     def get_vnc_console(self, context, console_type, instance):
         """Return connection information for a vnc console."""
         context = context.elevated()
         LOG.debug(_("Getting vnc console"), instance=instance)
         token = str(utils.gen_uuid())
 
-        if console_type == 'novnc':
+        if console_type == 'ajaxterm':
+            access_url = '%s?token=%s' % (FLAGS.ajaxterm_base_url, token)
+            connect_info = self.driver.get_web_console(instance)
+            connect_info['token'] = token
+            connect_info['access_url'] = access_url
+            return connect_info
+        elif console_type == 'novnc':
             # For essex, novncproxy_base_url must include the full path
             # including the html file (like http://myhost/vnc_auto.html)
             access_url = '%s?token=%s' % (FLAGS.novncproxy_base_url, token)
         elif console_type == 'xvpvnc':
             access_url = '%s?token=%s' % (FLAGS.xvpvncproxy_base_url, token)
-        elif console_type == 'ajaxterm':
-            access_url = '%s?token=%s' % (FLAGS.ajaxterm_base_url, token)
         else:
             raise exception.ConsoleTypeInvalid(console_type=console_type)
 
