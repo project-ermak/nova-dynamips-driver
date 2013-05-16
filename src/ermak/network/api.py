@@ -95,7 +95,10 @@ class QuantumUdpApi(API):
 
     def _get_available_networks(self, context, project_id,
                                 net_ids=None):
-        """Return only specified networks if provided."""
+        """Return only specified networks if provided.
+
+        Standard implementation uses public nets if empty list
+        provided, this is not desirable behavior."""
         if net_ids is None:
             return super(QuantumUdpApi, self)._get_available_networks(
                 context, project_id)
