@@ -2,4 +2,6 @@ export OS_USERNAME=guest
 export OS_PASSWORD=passw0r
 export OS_TENANT_NAME=ermak
 export OS_AUTH_URL=http://localhost:8774/v2
+export OS_AUTH_TOKEN=empty
+export OS_IMAGE_URL=http://localhost:9292
 export OS_AUTH_SYSTEM=legacy
