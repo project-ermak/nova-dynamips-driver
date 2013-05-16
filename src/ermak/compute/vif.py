@@ -1,3 +1,4 @@
+from lxml import etree
 from nova.openstack.common import cfg
 from nova import flags
 from nova import exception
@@ -6,6 +7,7 @@ from nova import utils
 from nova.virt import vif
 
 from netifaces import ifaddresses, AF_INET
+from nova.virt.libvirt.config import LibvirtConfigGuestDevice
 
 
 linux_net_opts = [
@@ -50,23 +52,56 @@ def delete_alias(iface, address, label=None):
             (address, address))
 
 
-class QuantumUdpChannelVIFDriver(vif.VIFDriver):
+class LibvirtConfigUdpInterface(LibvirtConfigGuestDevice):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestDevice, self).__init__(
+            root_name="interface",
+            **kwargs)
+
+        self.model = None
+        self.mac_addr = None
+        self.src_address = None
+        self.src_port= None
+        self.dst_address = None
+        self.dst_port = None
+
+    def format_dom(self):
+        dev = super(LibvirtConfigGuestDevice, self).format_dom()
+
+        dev.set("type", "udp")
+        dev.append(etree.Element("mac", address=self.mac_addr))
+        if self.model:
+            dev.append(etree.Element("model", type=self.model))
+        dev.append(etree.Element("source",
+            address=self.src_address,
+            port=self.src_port))
+        dev.append(etree.Element("destination",
+            address=self.dst_address,
+            port=self.dst_port))
+        return dev
+
+
+class LibvirtQuantumUdpChannelVIFDriver(vif.VIFDriver):
+
+    def _get_config(self, mapping, udp_attrs):
+        conf = LibvirtConfigUdpInterface()
+        conf.net_type = 'udp'
+        conf.mac_addr = mapping['mac']
+        conf.src_address = udp_attrs['src_address']
+        conf.src_port = udp_attrs['src_port']
+        conf.dst_address = udp_attrs['dst_address']
+        conf.dst_port = udp_attrs['dst_port']
+        return conf
 
     @utils.synchronized('udp_channel_setup')
     def plug(self, instance, vif, **kwargs):
+        LOG.debug("VIFDriver got vif: %s" % vif)
         iface = FLAGS.data_iface
-        udp_attrs = vif['meta']['quantum_udp_udp_attrs']
-        port_attrs = vif['meta']['quantum_port_attrs']
+        network, mapping = vif
+        udp_attrs = network['meta']['quantum_udp_udp_attrs']
         add_alias(iface, udp_attrs['src-address'])
-        result = {
-            'mac_address': vif['address'],
-            'src_address': udp_attrs['src-address'],
-            'src_port': udp_attrs['src-port'],
-            'dst_address': udp_attrs['dst-address'],
-            'dst_port': udp_attrs['dst-port'],
-            'slot_id': port_attrs['slot-id'],
-            'port_id': port_attrs['port-id']}
-        return result
+        return self._get_config(mapping, udp_attrs)
 
     @utils.synchronized('udp_channel_setup')
     def unplug(self, instance, vif, **kwargs):
