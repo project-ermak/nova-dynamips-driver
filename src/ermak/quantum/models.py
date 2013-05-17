@@ -11,13 +11,13 @@ class UdpLink(BASEV2):
         PrimaryKeyConstraint("cidr"),
     )
 
-    net_uuid = Column(String(255), nullable=True)
-    left_port_uuid = Column(String(255), nullable=True)
-    right_port_uuid = Column(String(255), nullable=True)
+    net_uuid = Column(String(36), nullable=True)
+    left_port_uuid = Column(String(36), nullable=True)
+    right_port_uuid = Column(String(36), nullable=True)
 
-    cidr = Column(String(255), nullable=False)
-    left = Column(String(255), nullable=False)
-    right = Column(String(255), nullable=False)
+    cidr = Column(String(18), nullable=False)
+    left = Column(String(15), nullable=False)
+    right = Column(String(15), nullable=False)
     port_left = Column(Integer, nullable=False)
     port_right = Column(Integer, nullable=False)
 
@@ -36,9 +36,9 @@ class PortAttribute(BASEV2):
     __table_args__ = (PrimaryKeyConstraint("port_uuid"),)
 
     port_uuid = Column(
-        String(255),
+        String(36),
         ForeignKey('ports.id', ondelete='CASCADE'), nullable=True)
-    attributes_json = Column(String(255), nullable=False)
+    attributes_json = Column(String(1024), nullable=False)
 
     def __init__(self, port_uuid, data):
         self.port_uuid = port_uuid
