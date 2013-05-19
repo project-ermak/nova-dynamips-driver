@@ -81,3 +81,25 @@ def slot_from_json(json_slot):
     slot['model'] = json_slot['model']
     slot['editable'] = json_slot['editable']
     return slot
+
+
+def device_type_to_json(device_type):
+    return {
+        'id': device_type['id'],
+        'name': device_type['name'],
+        'metadata': device_type['metadata'],
+        'parameters': device_type['parameters'],
+        'software': map(software_to_json, device_type['software']),
+        'slots': map(slot_to_json, device_type['slots'])}
+
+
+def software_to_json(software):
+    return {'id': software['id'], 'name': software['name']}
+
+
+def slot_to_json(slot):
+    return {
+        'model': slot['model'],
+        'editable': slot['editable'],
+        'supported': slot['supported']
+    }

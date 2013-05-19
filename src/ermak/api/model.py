@@ -49,3 +49,32 @@ class Instance(Document):
         'devices': [Device],
         'wires': [Wire]}
     required_fields = ['tenant']
+
+
+class Software(SchemaDocument):
+    structure = {
+        'id': basestring,
+        'name': basestring
+    }
+    required_fields = ['id', 'name']
+
+
+class Slot(SchemaDocument):
+    structure = {
+        'model': basestring,       # default NC
+        'editable': bool,
+        'supported': [basestring]} # list of supported NCs
+
+
+class DeviceType(Document):
+    structure = {
+        'id': basestring,
+        'platform': basestring,
+        'name': basestring,
+        'metadata': dict,
+        'parameters': dict,  # TODO: not used
+        'software': [Software],
+        'slots': [Slot]}
+    required_fields = [
+        'id', 'platform', 'name',
+        'metadata', 'parameters', 'software', 'slots']

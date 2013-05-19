@@ -4,6 +4,7 @@ from bson.objectid import ObjectId
 from novaclient.client import Client as NovaClient
 from ermak.api import db
 from ermak.api.errors import HardwareNotSupported, VmNotFound
+from ermak.api.model import DeviceType, Slot, Software
 from ermak.udpclient import QuantumUdpClient
 
 DELETED_STATE = 'deleted'
@@ -136,6 +137,93 @@ class OpenStackFacade(object):
                 raise VmNotFound(device['id'])
         return db.update_instance(instance)
 
+    def get_instance(self, ctx, id):
+        return db.get_instance_by_id(ctx.tenant, id)
+
+    def get_instances(self, ctx):
+        return db.get_instances_all(ctx.tenant)
+
+    def get_network_cards(self, ctx):
+        return [] # TODO
+
+    def get_device_types(self, ctx):
+        result = []
+
+        nova = self._get_nova_client(ctx)
+        flavors = nova.flavors.list()
+        flavor_names = map(lambda f: f.name, flavors)
+
+        for t in self._dynamips_types():
+            print t['id'], flavor_names
+            if not flavor_names.count(t['id']):
+                continue
+            software = self._platform_images(nova, t['platform'])
+            if software:
+                t['software'] = software
+                result.append(t)
+
+        return result
+
+    def get_webconsole(self, ctx, id, device_id):
+        pass
+
+    def _dynamips_flavor(self, model):
+        return 'c1.' + model
+
+    def _platform_images(self, nova, platform):
+        images = nova.images.list()
+        result = []
+        for image in images:
+            platform_meta = image.metadata.get('dynamips_platform')
+            print platform_meta, platform
+            if platform_meta == platform:
+                software = Software({
+                    'id': image.id,
+                    'name': image.name})
+                result.append(software)
+        return result
+
+    def _dynamips_types(self):
+        from dynagen import dynamips_lib
+
+        def make_slots_list(slots_dict):
+            slots = []
+            for i in xrange(100):
+                dynamips_slot = slots_dict.get(i)
+                if not dynamips_slot:
+                    return slots
+                if isinstance(dynamips_slot, basestring):
+                    slot = Slot({
+                        'model': dynamips_slot,
+                        'editable': False,
+                        'supported': [dynamips_slot]})
+                else:
+                    slot = Slot({
+                        'model': None,
+                        'editable': True,
+                        'supported': list(dynamips_slot)})
+                slots.append(slot)
+
+        result = []
+        print dynamips_lib.ADAPTER_MATRIX
+        for (platform, chassis_dict) in dynamips_lib.ADAPTER_MATRIX.iteritems():
+            cls = getattr(dynamips_lib, platform.capitalize(), None)
+            if not cls:
+                continue
+            for (chassis, slots_dict) in chassis_dict.iteritems():
+                if chassis == '':
+                    chassis = platform[int(platform[0] == 'c'):]
+                slots = make_slots_list(slots_dict)
+                hwtype = DeviceType({
+                    'id': self._dynamips_flavor(chassis),
+                    'platform': platform,
+                    'name': 'Cisco ' + chassis,
+                    'metadata': {},
+                    'parameters': {},
+                    'software': [],  # this must be filled later
+                    'slots': slots})
+                result.append(hwtype)
+        return result
 
     def _flavor_for_device(self, nova, device):
         flavors = nova.flavors.list()
@@ -145,7 +233,6 @@ class OpenStackFacade(object):
                segments[1].lower() == device['hardware'].lower():
                 return flavor.id
         raise HardwareNotSupported(device['hardware'])
-
 
     def _image_for_device(self, nova, device):
         images = nova.images.list()

@@ -26,16 +26,20 @@ def api_response(payload = None, status=200, headers=None):
 
 
 class RequestContext(object):
+    DEFAULT = 'default'
 
     def __init__(self, request=None):
         self.username = 'admin'
         self.api_key = 'qwerty'
-        self.tenant = 'ermak'
+        if request:
+            self.tenant = request.view_args.get('tenant', self.DEFAULT)
+        else:
+            self.tenant = self.DEFAULT
 
 
 @app.route("/<tenant>/instances", methods=["GET"])
 def instance_list(tenant):
-    instances = db.get_instances_all(tenant)
+    instances = app.facade.get_instances(RequestContext(request))
     return api_response(status=200, payload=map(instance_to_json, instances))
 
 
@@ -46,7 +50,7 @@ def instance_get(tenant, id):
     except InvalidId as e:
         return api_response(status=400, payload={'error': str(e)})
     try:
-        instance = db.get_instance_by_id(tenant, instance_id)
+        instance = app.facade.get_instance(RequestContext(request), id)
         return api_response(status=200, payload=instance_to_json(instance))
     except LookupError:
         return api_response(
@@ -82,6 +86,22 @@ def instance_delete(tenant, id):
             status=404, payload={'error': "Instance with id %s not found" % id})
     destroyed = app.facade.destroy_instance(RequestContext(request), instance)
     return api_response(status=200, payload=instance_to_json(destroyed))
+
+
+@app.route("/<tenant>/cards", methods=["GET"])
+def network_adapters_list(tenant):
+    pass
+
+
+@app.route("/<tenant>/devices", methods=["GET"])
+def device_types_list(tenant):
+    types = app.facade.get_device_types(RequestContext(request))
+    return api_response(status=200, payload=map(device_type_to_json, types))
+
+
+@app.route("/<tenant>/instances/<id>/webconsole/<device>")
+def get_webconsole(tenant, id, device):
+    pass
 
 
 if __name__ == '__main__':
