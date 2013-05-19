@@ -101,5 +101,14 @@ def slot_to_json(slot):
     return {
         'model': slot['model'],
         'editable': slot['editable'],
-        'supported': slot['supported']
-    }
+        'supported': slot['supported']}
+
+
+def network_card_to_json(nc):
+    return {
+        'model': nc['model'],
+        'ports': map(portgroup_to_json, nc['ports'])}
+
+
+def portgroup_to_json(portgroup):
+    return {'type': portgroup['type'], 'count': portgroup['count']}

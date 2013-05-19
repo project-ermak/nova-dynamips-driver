@@ -90,7 +90,8 @@ def instance_delete(tenant, id):
 
 @app.route("/<tenant>/cards", methods=["GET"])
 def network_adapters_list(tenant):
-    pass
+    cards = app.facade.get_network_cards(RequestContext(request))
+    return api_response(status=200, payload=map(network_card_to_json, cards))
 
 
 @app.route("/<tenant>/devices", methods=["GET"])

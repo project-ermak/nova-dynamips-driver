@@ -4,10 +4,23 @@ from bson.objectid import ObjectId
 from novaclient.client import Client as NovaClient
 from ermak.api import db
 from ermak.api.errors import HardwareNotSupported, VmNotFound
-from ermak.api.model import DeviceType, Slot, Software
+from ermak.api.model import DeviceType, Slot, Software, PortGroup, NetworkCard
 from ermak.udpclient import QuantumUdpClient
 
 DELETED_STATE = 'deleted'
+TYPENAMES = {
+    'f': 'FastEthernet',
+    'g': 'GigabitEthernet',
+    'a': 'ATM',
+    's': 'Serial',
+    'e': 'Ethernet',
+    'p': 'POS', # POS-OC3
+    'i': 'IDS', # IDS
+    'an': 'NAM' # NAM
+}
+ETHERNET_LETTERS = ['e', 'f', 'g']
+QEMU_CARDS = ['e1000']  # cards for qemu are not supported
+DEFAULT_QEMU_CARD = QEMU_CARDS[0]
 
 class OpenStackFacade(object):
 
@@ -144,7 +157,69 @@ class OpenStackFacade(object):
         return db.get_instances_all(ctx.tenant)
 
     def get_network_cards(self, ctx):
-        return [] # TODO
+        result = []
+
+        result.extend(self._dynamips_network_cards())
+        result.extend(self._qemu_network_cards())
+
+        return result
+
+    def _dynamips_network_cards(self):
+        from dynagen import dynamips_lib
+        dynamips_lib.NOSEND = True
+
+        def if_letter_to_type(letter):
+            return TYPENAMES[letter]
+
+        cards = {}
+        fake_dynamips = dynamips_lib.Dynamips('example.com')
+        for (platform, chassis_dict) in dynamips_lib.ADAPTER_MATRIX.iteritems():
+            router_class = getattr(dynamips_lib, platform.capitalize(), None)
+            if not router_class:
+                continue
+            for (chassis, adapters_dict) in chassis_dict.iteritems():
+                for (slot, adapters) in adapters_dict.iteritems():
+                    if isinstance(adapters, basestring):
+                        adapter_list = [adapters]
+                    else:
+                        adapter_list = adapters
+                    for adapter in adapter_list:
+                        if adapter in cards:
+                            continue
+                        classname = adapter.replace('-', '_')
+                        fake_router = router_class(fake_dynamips, chassis=chassis)
+                        class_ = getattr(dynamips_lib, classname, None)
+                        if class_:
+                            if fake_router.slot[slot] and \
+                               adapter == fake_router.slot[slot].adapter:
+                                instance = fake_router.slot[slot]
+                            else:
+                                instance = class_(fake_router, slot)
+                            ports = []
+                            for (if_letter, if_dict) in instance.interfaces.iteritems():
+                                if_type = if_letter_to_type(if_letter)
+                                count = len(if_dict)
+                                port_group = PortGroup({
+                                    'type': if_type,
+                                    'count': count})
+                                ports.append(port_group)
+                            card = NetworkCard({
+                                'model': adapter,
+                                'ports': ports})
+                            cards[adapter] = card
+
+        return list(cards.itervalues())
+
+    def _qemu_network_cards(self):
+        result = []
+
+        card = NetworkCard({
+            'model': QEMU_CARDS[0],
+            'ports': [PortGroup({
+                'type': TYPENAMES['g'], 'count': 1})]})
+        result.append(card)
+
+        return result
 
     def get_device_types(self, ctx):
         result = []
@@ -161,6 +236,11 @@ class OpenStackFacade(object):
             if software:
                 t['software'] = software
                 result.append(t)
+
+        for t in self._qemu_types(flavors):
+            software = self._platform_images(nova, None)
+            t['software'] = software
+            result.append(t)
 
         return result
 
@@ -181,6 +261,27 @@ class OpenStackFacade(object):
                     'id': image.id,
                     'name': image.name})
                 result.append(software)
+        return result
+
+    def _qemu_types(self, flavors):
+        result = []
+        for flavor in flavors:
+            if flavor.startswith('c1'):
+                continue
+            type = DeviceType({
+                'id': flavor.name,
+                'platform': 'qemu',
+                'name': "Virtual Machine %s CPU %s MB" % (
+                    flavor.vcpus, flavor.ram),
+                'metadata': {},
+                'parameters': {},
+                'software': [],
+                'slots': [Slot({
+                    'model': DEFAULT_QEMU_CARD,
+                    'editable': False,
+                    'supported': [DEFAULT_QEMU_CARD]})]})
+            result.append(type)
+
         return result
 
     def _dynamips_types(self):

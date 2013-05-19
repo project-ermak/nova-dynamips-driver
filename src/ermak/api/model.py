@@ -78,3 +78,19 @@ class DeviceType(Document):
     required_fields = [
         'id', 'platform', 'name',
         'metadata', 'parameters', 'software', 'slots']
+
+
+class PortGroup(SchemaDocument):
+    structure = {
+        'type': basestring,
+        'count': int
+    }
+    required_fields = ['type', 'count']
+
+
+class NetworkCard(Document):
+    structure = {
+        'model': basestring,
+        'ports': [PortGroup]
+    }
+    required_fields = ['model', 'ports']
