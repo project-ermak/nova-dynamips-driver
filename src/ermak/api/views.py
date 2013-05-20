@@ -30,13 +30,14 @@ def device_to_json(device):
         'id': device['id'],
         'name': device['name'],
         'hardware': device['hardware'],
+        'software': device['software_id'],
         'slots': slots,
         'metadata': device['metadata']}
 
 
 def slot_to_json(slot):
     return {
-        'id': slot['id'],
+        'parameters': slot['parameters'],
         'model': slot['model'],
         'editable': slot['editable']}
 
@@ -72,12 +73,13 @@ def device_from_json(json_device):
     device['hardware'] = json_device['hardware']
     device['slots'] = map(slot_from_json, json_device['slots'])
     device['metadata'] = json_device['metadata']
+    device['software_id'] = json_device['software']
     return device
 
 
 def slot_from_json(json_slot):
     slot = Slot()
-    slot['id'] = json_slot['id']
+    slot['parameters'] = json_slot['parameters']
     slot['model'] = json_slot['model']
     slot['editable'] = json_slot['editable']
     return slot
@@ -90,14 +92,14 @@ def device_type_to_json(device_type):
         'metadata': device_type['metadata'],
         'parameters': device_type['parameters'],
         'software': map(software_to_json, device_type['software']),
-        'slots': map(slot_to_json, device_type['slots'])}
+        'slots': map(slot_proto_to_json, device_type['slots'])}
 
 
 def software_to_json(software):
     return {'id': software['id'], 'name': software['name']}
 
 
-def slot_to_json(slot):
+def slot_proto_to_json(slot):
     return {
         'model': slot['model'],
         'editable': slot['editable'],

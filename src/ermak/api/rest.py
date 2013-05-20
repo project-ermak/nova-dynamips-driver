@@ -50,7 +50,7 @@ def instance_get(tenant, id):
     except InvalidId as e:
         return api_response(status=400, payload={'error': str(e)})
     try:
-        instance = app.facade.get_instance(RequestContext(request), id)
+        instance = app.facade.get_instance(RequestContext(request), instance_id)
         return api_response(status=200, payload=instance_to_json(instance))
     except LookupError:
         return api_response(
@@ -102,7 +102,15 @@ def device_types_list(tenant):
 
 @app.route("/<tenant>/instances/<id>/webconsole/<device>")
 def get_webconsole(tenant, id, device):
-    pass
+    try:
+        instance_id = ObjectId(id)
+    except InvalidId as e:
+        return api_response(status=400, payload={'error': str(e)})
+    try:
+        url = app.facade.get_webconsole(RequestContext(request), instance_id, device)
+        return api_response(status=303, headers={'Location': url})
+    except LookupError:
+        return api_response(status=404)
 
 
 if __name__ == '__main__':

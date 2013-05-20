@@ -1,6 +1,6 @@
 class ErmakApiException(Exception):
     def __init__(self, msg):
-        super(ErmakApiException, self).__init__(self)
+        super(ErmakApiException, self).__init__(msg)
 
 class HardwareNotSupported(ErmakApiException):
     def __init__(self, hardware):

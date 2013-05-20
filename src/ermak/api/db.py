@@ -31,6 +31,7 @@ def get_instances_all(tenant):
 def get_instance_by_id(tenant, instance_id):
     global _db
     query = {'tenant': tenant, '_id': instance_id}
+    print query
     result = list(_db.instances.Instance.find(query))
     if len(result) == 0:
         raise LookupError("Can not find object with id %s" % instance_id)

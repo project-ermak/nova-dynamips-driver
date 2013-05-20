@@ -3,11 +3,11 @@ from mongokit import Document, SchemaDocument
 
 class Slot(SchemaDocument):
     structure = {
-        'id': int,
         'model': unicode,
+        'parameters': dict,
         'editable': bool
     }
-    required_fields = ['id', 'model', 'editable']
+    required_fields = ['parameters', 'model', 'editable']
 
 
 class Device(SchemaDocument):
@@ -15,11 +15,12 @@ class Device(SchemaDocument):
         'id': basestring,
         'instance_id': basestring,
         'status': basestring,
+        'software_id': basestring,
         'name': unicode,
         'hardware': unicode,
         'slots': [Slot],
         'metadata': dict}
-    required_fields = ['id', 'name', 'hardware', 'slots']
+    required_fields = ['id', 'name', 'hardware', 'slots', 'software_id']
     default_values = {'status': 'stopped'}
 
 
@@ -59,7 +60,7 @@ class Software(SchemaDocument):
     required_fields = ['id', 'name']
 
 
-class Slot(SchemaDocument):
+class SlotProto(SchemaDocument):
     structure = {
         'model': basestring,       # default NC
         'editable': bool,
@@ -74,7 +75,7 @@ class DeviceType(Document):
         'metadata': dict,
         'parameters': dict,  # TODO: not used
         'software': [Software],
-        'slots': [Slot]}
+        'slots': [SlotProto]}
     required_fields = [
         'id', 'platform', 'name',
         'metadata', 'parameters', 'software', 'slots']

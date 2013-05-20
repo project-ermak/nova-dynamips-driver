@@ -4,7 +4,7 @@ from bson.objectid import ObjectId
 from novaclient.client import Client as NovaClient
 from ermak.api import db
 from ermak.api.errors import HardwareNotSupported, VmNotFound
-from ermak.api.model import DeviceType, Slot, Software, PortGroup, NetworkCard
+from ermak.api.model import DeviceType, Slot, Software, PortGroup, NetworkCard, SlotProto
 from ermak.udpclient import QuantumUdpClient
 
 DELETED_STATE = 'deleted'
@@ -73,12 +73,18 @@ class OpenStackFacade(object):
                     'name': "%s-%s-%s" % (
                         instance_id, wire_id, side)}})['port']
 
+        devices_dict = dict(map(lambda d: (d['id'], d), instance['devices']))
         def port_attrs(wire_side):
+            device = devices_dict[wire_side['device']]
+            slot = wire_side['slot']
+            slot_model = device['slots'][slot]['model']
             return {
-                'slot-id': wire_side['slot'],
-                'port-id': wire_side['port']}
+                'slot-id': slot,
+                'port-id': wire_side['port'],
+                'slot-model': slot_model}
 
         for wire in instance['wires']:
+            print wire
             net = quantum.create_network({
                 'network': {
                     'name': "%s-%s" % (instance['_id'], wire['id']),
@@ -94,12 +100,14 @@ class OpenStackFacade(object):
             add_conn_info(wire['left']['device'], net['id'], left['id'])
             add_conn_info(wire['right']['device'], net['id'], right['id'])
             wire['quantum_id'] = net['id']
+        print conn_info
         for device in instance['devices']:
+            print "Launching %s" % device
             conn = conn_info.get(device['id'])
             logging.debug("Connection info for instance: %s" % conn)
             server = nova.servers.create(
                 name="%s-%s-%s" % (instance['_id'], device['id'], device['name']),
-                image=self._image_for_device(nova, device),
+                image=device['software_id'],
                 flavor=self._flavor_for_device(nova, device),
                 nics=conn,
                 scheduler_hints=[]) # TODO: use instance type
@@ -245,7 +253,14 @@ class OpenStackFacade(object):
         return result
 
     def get_webconsole(self, ctx, id, device_id):
-        pass
+        instance = db.get_instance_by_id(ctx.tenant, id)
+        device = dict(
+            map(lambda d: (d['id'], d), instance['devices']))[device_id]
+
+        nova = self._get_nova_client(ctx)
+        server = nova.servers.get(device['instance_id'])
+        console = nova.servers.get_vnc_console(server, 'ajaxterm')
+        return console['console']['url']
 
     def _dynamips_flavor(self, model):
         return 'c1.' + model
@@ -276,7 +291,7 @@ class OpenStackFacade(object):
                 'metadata': {},
                 'parameters': {},
                 'software': [],
-                'slots': [Slot({
+                'slots': [SlotProto({
                     'model': DEFAULT_QEMU_CARD,
                     'editable': False,
                     'supported': [DEFAULT_QEMU_CARD]})]})
@@ -294,12 +309,12 @@ class OpenStackFacade(object):
                 if not dynamips_slot:
                     return slots
                 if isinstance(dynamips_slot, basestring):
-                    slot = Slot({
+                    slot = SlotProto({
                         'model': dynamips_slot,
                         'editable': False,
                         'supported': [dynamips_slot]})
                 else:
-                    slot = Slot({
+                    slot = SlotProto({
                         'model': None,
                         'editable': True,
                         'supported': list(dynamips_slot)})
@@ -329,16 +344,7 @@ class OpenStackFacade(object):
     def _flavor_for_device(self, nova, device):
         flavors = nova.flavors.list()
         for flavor in flavors:
-            segments = flavor.name.split('.', 1)
-            if len(segments) == 2 and\
-               segments[1].lower() == device['hardware'].lower():
+            if flavor.name == device['hardware']:
                 return flavor.id
-        raise HardwareNotSupported(device['hardware'])
-
-    def _image_for_device(self, nova, device):
-        images = nova.images.list()
-        for image in images:
-            if device['hardware'].lower() in image.name.lower():
-                return image.id
         raise HardwareNotSupported(device['hardware'])
 
