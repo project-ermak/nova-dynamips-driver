@@ -49,6 +49,7 @@ class QuantumUdpApi(API):
         :return: Unmodified dict from plugin. Expected to have keys:
                 - slot-id
                 - port-id
+                - slot-model
         """
         channel = self.ext_client(context).show_port_attrs(
             tenant_id, net_id, port_id)
@@ -58,10 +59,10 @@ class QuantumUdpApi(API):
         client = quantumv2.get_client(context)
         ports = client.list_ports()['ports']
         LOG.debug("Got ports: %s" % ports)
-        for port in ports: # TODO: filtering
+        for port in ports: # TODO: server-side filtering
             att = client.show_port(port['id'])['port']
             LOG.debug("Got port: %s" % ports)
-            if att['device_id'] == instance_id:
+            if att['device_id'] == instance_id and att['network_id'] == net_id:
                 return port['id']
         raise AssertionError(
             "Can not find port in network %s with device_id %s" % (

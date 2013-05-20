@@ -39,6 +39,12 @@ flags.DECLARE('vncserver_proxyclient_address', 'nova.vnc')
 FLAGS.register_opts(dynamips_opts)
 
 
+def _get_image_meta(context, image_ref):
+    image_service, image_id = glance.get_remote_image_service(context,
+        image_ref)
+    return image_service.show(context, image_id)
+
+
 def get_connection(read_only=False):
     return DynamipsDriver(read_only)
 
@@ -177,33 +183,34 @@ class DynamipsDriver(ComputeDriver):
         """
         return map(lambda x: x.os_name, self._routers.itervalues())
 
-    def _class_for_flavor(self, flavorname):
-        res = re.match(r'r1\.(.*)', flavorname)
+    def _class_for_platform(self, platform):
+        try:
+            # try direct model first
+            return dynamips_lib.__dict__[platform.upper()]
+        except KeyError:
+            raise exception.FlavorNotFound(
+                "Can not find router platform %s" % platform)
+
+    def _chassis_for_flavor(self, flavorname):
+        res = re.match(r'c1\.(.*)', flavorname)
         if res:
-            model = res.group(1)
-            try:
-                # try direct model first
-                return dynamips_lib.__dict__[model.upper()]
-            except KeyError:
-                raise exception.FlavorNotFound(
-                    "Can not find router model %s" % model)
+            return res.group(1)
         else:
             raise exception.FlavorNotFound(
-                "Dynamips accepts only r1.xxx flavors, got %s" % flavorname)
+                "Dynamips accepts only c1.xxx flavors, got %s" % flavorname)
 
-    def _class_for_instance(self, instance, inst_type):
-        class_ = self._class_for_flavor(inst_type['name'])
-
+    def _class_for_instance(self, image_meta):
+        class_ = self._class_for_platform(
+            image_meta['properties']['dynamips_platform'])
         class CurrentRouter(RouterWrapper, class_):  # TODO: metaclass?
             pass
         return CurrentRouter
 
-    def _instance_to_router(self, context, instance):
+    def _instance_to_router(self, context, instance, image_meta):
         inst_type = \
             instance_types.get_instance_type(instance["instance_type_id"])
-        chassis = \
-            db.instance_metadata_get(context, instance["id"]).get("chassis")
-        C = self._class_for_instance(instance, inst_type)
+        chassis = self._chassis_for_flavor(inst_type['name'])
+        C = self._class_for_instance(image_meta)
         r = C(self.dynamips, name=instance["id"], chassis=chassis)
         r.os_name = instance["name"]
         r.ram = inst_type["memory_mb"]
@@ -249,6 +256,15 @@ class DynamipsDriver(ComputeDriver):
                         udp_attrs['dst-address'], udp_attrs['prefix-len']),
                     label=self._mklabel(udp_attrs['dst-address']))
             adapter = router.slot[port_attrs['slot-id']]
+            if not adapter:
+                model = port_attrs['slot-model']
+                if model:
+                    class_ = getattr(dynamips_lib, model.replace('-', '_'))
+                    adapter = class_(router, port_attrs['slot-id'])
+                    router.slot[port_attrs['slot-id']] = adapter
+                else:
+                    LOG.error("Errant vif: %s" % vif)
+                    raise Exception("Expected slot model to be defined")
             LOG.debug("Creating nio to %s, addresses are %s" % (udp_attrs['dst-address'], list_addresses(iface)))
             nio = NIO_udp(
                 self.dynamips,
@@ -284,9 +300,9 @@ class DynamipsDriver(ComputeDriver):
             except Exception as e:
                 LOG.error("Can not deallocate vif %s" % vif, e)
 
-    def _do_create_instance(self, context, instance, network_info):
+    def _do_create_instance(self, context, instance, image_meta, network_info):
         image = self._setup_image(context, instance)
-        r = self._instance_to_router(context, instance)
+        r = self._instance_to_router(context, instance, image_meta)
         self._setup_network(context, r, instance, network_info)
         r.image = image
         r.mmap = False
@@ -294,8 +310,7 @@ class DynamipsDriver(ComputeDriver):
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=[], block_device_info=None):
-        LOG.debug("Spawning with network info %s" % network_info)
-        self._do_create_instance(context, instance, network_info)
+        self._do_create_instance(context, instance, image_meta, network_info)
         self._router_by_name(instance["name"]).start()
 
     def destroy(self, instance, network_info, block_device_info=None):
@@ -388,8 +403,9 @@ class DynamipsDriver(ComputeDriver):
                                   block_device_info=None):
         """resume guest state when a host is booted"""
         current_state = self._current_state_for_instance(instance)
+        image_meta = _get_image_meta(context, instance['image_ref'])
         if current_state == power_state.NOSTATE:
-            self._do_create_instance(context, instance, network_info)
+            self._do_create_instance(context, instance, image_meta, network_info)
         current_state = self._current_state_for_instance(instance)
 
         if current_state == power_state.SHUTDOWN:
